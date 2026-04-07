@@ -22,7 +22,7 @@ Install the latest release into `code-server`:
 
 ```bash
 tmpfile="$(mktemp -t codex-tab-XXXXXX.vsix)" && \
-curl -fL "https://github.com/smturtle2/codex-tab/releases/latest/download/codex-tab-0.0.6.vsix" -o "$tmpfile" && \
+curl -fL "https://github.com/smturtle2/codex-tab/releases/latest/download/codex-tab-0.0.7.vsix" -o "$tmpfile" && \
 code-server --install-extension "$tmpfile" && \
 rm -f "$tmpfile"
 ```
@@ -30,7 +30,7 @@ rm -f "$tmpfile"
 Release links:
 
 - Latest release: [github.com/smturtle2/codex-tab/releases/latest](https://github.com/smturtle2/codex-tab/releases/latest)
-- Direct VSIX asset: [codex-tab-0.0.6.vsix](https://github.com/smturtle2/codex-tab/releases/latest/download/codex-tab-0.0.6.vsix)
+- Direct VSIX asset: [codex-tab-0.0.7.vsix](https://github.com/smturtle2/codex-tab/releases/latest/download/codex-tab-0.0.7.vsix)
 
 Then reload `code-server`, open the Command Palette, run `Codex Tab: Sign In`, finish the browser flow, paste the callback URL, and run `Codex Tab: Check Setup`.
 
@@ -40,8 +40,10 @@ Then reload `code-server`, open the Command Palette, run `Codex Tab: Sign In`, f
 - Server-side execution with `extensionKind: ["workspace"]`
 - Direct `https://chatgpt.com/backend-api/codex/models` and `/responses` calls
 - Live model list loaded from the Codex backend
+- Rich model metadata parsing for nested model-list payloads
 - Configurable reasoning effort with model-aware selection
 - Backend requests include the packaged extension `client_version`
+- Model discovery failures now include response-shape diagnostics in logs/errors
 - Extension-owned OAuth PKCE sign-in stored in VS Code secret storage
 - No thread-based `codex app-server` generation flow
 
@@ -89,7 +91,7 @@ npm run package:vsix
 Install a locally packaged build with:
 
 ```bash
-code-server --install-extension ./codex-tab-0.0.6.vsix
+code-server --install-extension ./codex-tab-0.0.7.vsix
 ```
 
 ## License

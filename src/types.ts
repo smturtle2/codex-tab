@@ -36,6 +36,8 @@ export interface ExtensionSettings {
 export interface ModelDescriptor {
   id: string;
   label: string;
+  defaultReasoningEffort?: ReasoningEffort | undefined;
+  isDefault?: boolean | undefined;
   supportedReasoningEfforts?: ReasoningEffort[] | undefined;
   reasoningEffortSource?: "backend" | "inferred" | undefined;
 }

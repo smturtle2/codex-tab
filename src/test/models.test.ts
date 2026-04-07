@@ -79,11 +79,88 @@ test("parseModelListResponse handles nested model arrays and infers reasoning wh
   ]);
 });
 
+test("parseModelListResponse handles official model metadata and reasoning option objects", () => {
+  const response: HttpResponse = {
+    status: 200,
+    headers: {
+      "content-type": "application/json",
+    },
+    bodyText: JSON.stringify({
+      data: [
+        {
+          model: "gpt-5.3-codex",
+          displayName: "GPT-5.3 Codex",
+          isDefault: true,
+          defaultReasoningEffort: "medium",
+          supportedReasoningEfforts: [
+            { reasoningEffort: "low", description: "Fast" },
+            { reasoningEffort: "medium", description: "Balanced" },
+            { reasoningEffort: "xhigh", description: "Deep" },
+          ],
+        },
+      ],
+    }),
+  };
+
+  assert.deepEqual(parseModelListResponse(response), [
+    {
+      id: "gpt-5.3-codex",
+      label: "GPT-5.3 Codex",
+      defaultReasoningEffort: "medium",
+      isDefault: true,
+      supportedReasoningEfforts: ["low", "medium", "xhigh"],
+      reasoningEffortSource: "backend",
+    },
+  ]);
+});
+
+test("parseModelListResponse handles deeper wrapper objects and slug-based ids", () => {
+  const response: HttpResponse = {
+    status: 200,
+    headers: {
+      "content-type": "application/json",
+    },
+    bodyText: JSON.stringify({
+      payload: {
+        page: {
+          groups: [
+            {
+              entry: {
+                slug: "gpt-5.4",
+                display_name: "GPT-5.4",
+                reasoning: {
+                  supportedReasoningEfforts: [
+                    { reasoningEffort: "minimal" },
+                    { reasoningEffort: "high" },
+                  ],
+                  defaultReasoningEffort: "high",
+                },
+              },
+            },
+          ],
+        },
+      },
+    }),
+  };
+
+  assert.deepEqual(parseModelListResponse(response), [
+    {
+      id: "gpt-5.4",
+      label: "GPT-5.4",
+      defaultReasoningEffort: "high",
+      supportedReasoningEfforts: ["minimal", "high"],
+      reasoningEffortSource: "backend",
+    },
+  ]);
+});
+
 test("validateConfiguredModel rejects unavailable models and invalid backend reasoning", () => {
   const models: ModelDescriptor[] = [
     {
       id: "gpt-5.4-mini",
       label: "GPT-5.4 Mini",
+      defaultReasoningEffort: "minimal",
+      isDefault: false,
       supportedReasoningEfforts: ["minimal", "low"],
       reasoningEffortSource: "backend",
     },
@@ -95,11 +172,56 @@ test("validateConfiguredModel rejects unavailable models and invalid backend rea
 
   assert.throws(() => {
     validateConfiguredModel(models, "gpt-5.4-mini", "high");
-  }, /not supported/i);
+  }, /recommended: minimal/i);
 
   assert.equal(
     validateConfiguredModel(models, "gpt-5.4-mini", "low").id,
     "gpt-5.4-mini",
+  );
+});
+
+test("parseModelListResponse reports diagnostics for unusable payloads", () => {
+  const response: HttpResponse = {
+    status: 200,
+    headers: {
+      "content-type": "application/json",
+    },
+    bodyText: JSON.stringify({
+      payload: {
+        models: [
+          {
+            supportedReasoningEfforts: [{ reasoningEffort: "low" }],
+          },
+        ],
+      },
+    }),
+  };
+
+  assert.throws(
+    () => parseModelListResponse(response),
+    /top-level keys: payload; candidate paths: none; body preview:/i,
+  );
+});
+
+test("parseModelListResponse ignores unrelated metadata ids outside model containers", () => {
+  const response: HttpResponse = {
+    status: 200,
+    headers: {
+      "content-type": "application/json",
+    },
+    bodyText: JSON.stringify({
+      meta: {
+        id: "request-123",
+      },
+      payload: {
+        status: "ok",
+      },
+    }),
+  };
+
+  assert.throws(
+    () => parseModelListResponse(response),
+    /top-level keys: meta, payload; candidate paths: none; body preview:/i,
   );
 });
 

@@ -140,8 +140,9 @@ export class CodexAutocompleteService {
       await this.updateSetting("model", selected.model.id);
       const supportedEfforts = getReasoningEffortsForModel(selected.model);
       if (!supportedEfforts.includes(this.settings.reasoningEffort)) {
+        const recommended = selected.model.defaultReasoningEffort ?? supportedEfforts[0];
         void vscode.window.showWarningMessage(
-          `Model ${selected.model.id} may not support reasoning effort "${this.settings.reasoningEffort}". Run "Codex Tab: Select Reasoning Effort" to adjust it.`,
+          `Model ${selected.model.id} may not support reasoning effort "${this.settings.reasoningEffort}". Run "Codex Tab: Select Reasoning Effort" to adjust it.${recommended ? ` Recommended: ${recommended}.` : ""}`,
         );
       }
     } catch (error) {
@@ -159,8 +160,8 @@ export class CodexAutocompleteService {
           description: effort === this.settings.reasoningEffort ? "Current" : effort,
           detail:
             model.reasoningEffortSource === "backend"
-              ? `Supported by ${model.id}`
-              : `Shown using inferred support for ${this.settings.model}`,
+              ? `Supported by ${model.id}${model.defaultReasoningEffort === effort ? " (default)" : ""}`
+              : `Shown using inferred support for ${this.settings.model}${model.defaultReasoningEffort === effort ? " (backend default)" : ""}`,
           effort,
         })),
         {
@@ -495,5 +496,8 @@ function describeReasoningSupport(model: ModelDescriptor): string {
   const efforts = getReasoningEffortsForModel(model);
   const source =
     model.reasoningEffortSource === "backend" ? "reported by backend" : "inferred";
-  return `Reasoning: ${efforts.join(", ")} (${source})`;
+  const defaultEffort = model.defaultReasoningEffort
+    ? `; default: ${model.defaultReasoningEffort}`
+    : "";
+  return `Reasoning: ${efforts.join(", ")} (${source}${defaultEffort})`;
 }

@@ -15,6 +15,16 @@ const GPT5_REASONING_EFFORTS: ReasoningEffort[] = ["minimal", "low", "medium", "
 const GPT51_REASONING_EFFORTS: ReasoningEffort[] = ["none", "low", "medium", "high"];
 const CODEX_REASONING_EFFORTS: ReasoningEffort[] = ["low", "medium", "high", "xhigh"];
 
+interface ModelCandidate {
+  path: string;
+  value: unknown;
+}
+
+interface ModelIdentifier {
+  id: string;
+  source: "id" | "model" | "slug" | "name";
+}
+
 export function normalizeReasoningEffort(value: string | undefined): ReasoningEffort {
   const normalized = value?.trim().toLowerCase();
   return isReasoningEffort(normalized) ? normalized : DEFAULT_REASONING_EFFORT;
@@ -52,8 +62,9 @@ export function validateConfiguredModel(
     supportedEfforts?.length &&
     !supportedEfforts.includes(reasoningEffort)
   ) {
+    const recommended = getDefaultReasoningEffort(model, supportedEfforts);
     throw new Error(
-      `Reasoning effort "${reasoningEffort}" is not supported by "${modelId}". Choose one of: ${supportedEfforts.join(", ")}.`,
+      `Reasoning effort "${reasoningEffort}" is not supported by "${modelId}". Choose one of: ${supportedEfforts.join(", ")}.${recommended ? ` Recommended: ${recommended}.` : ""}`,
     );
   }
 
@@ -69,7 +80,7 @@ export function findModelDescriptor(
 
 export function parseModelListResponse(response: HttpResponse): ModelDescriptor[] {
   const payload = parseJsonResponse<unknown>(response);
-  return parseModelListPayload(payload);
+  return parseModelListPayload(payload, response.headers["content-type"]);
 }
 
 export function formatReasoningEffortLabel(effort: ReasoningEffort): string {
@@ -89,26 +100,32 @@ export function formatReasoningEffortLabel(effort: ReasoningEffort): string {
   }
 }
 
-function parseModelListPayload(payload: unknown): ModelDescriptor[] {
-  const entries = extractModelEntries(payload);
+function parseModelListPayload(
+  payload: unknown,
+  contentType: string | undefined,
+): ModelDescriptor[] {
+  const candidates = collectModelCandidates(payload);
   const models = new Map<string, ModelDescriptor>();
 
-  for (const entry of entries) {
-    const model = normalizeModel(entry);
+  for (const candidate of candidates) {
+    const model = normalizeModel(candidate.value);
     if (model) {
       models.set(model.id, model);
     }
   }
 
   if (models.size === 0) {
-    throw new Error("model list response did not include any usable models");
+    throw new Error(buildModelListError(payload, contentType, candidates));
   }
 
   return [...models.values()].sort((left, right) => left.label.localeCompare(right.label));
 }
 
-function extractModelEntries(payload: unknown): unknown[] {
-  const queue: Array<{ value: unknown; depth: number }> = [{ value: payload, depth: 0 }];
+function collectModelCandidates(payload: unknown): ModelCandidate[] {
+  const queue: Array<{ value: unknown; path: string }> = [{ value: payload, path: "$" }];
+  const visited = new WeakSet<object>();
+  const seenPaths = new Set<string>();
+  const candidates: ModelCandidate[] = [];
 
   while (queue.length > 0) {
     const current = queue.shift();
@@ -116,27 +133,52 @@ function extractModelEntries(payload: unknown): unknown[] {
       continue;
     }
 
-    if (Array.isArray(current.value) && current.value.some(looksLikeModelEntry)) {
-      return current.value;
-    }
-
-    if (!current.value || typeof current.value !== "object" || current.depth >= 3) {
+    if (Array.isArray(current.value)) {
+      for (const [index, item] of current.value.entries()) {
+        const path = `${current.path}[${index}]`;
+        if (looksLikeModelEntry(item, path) && !seenPaths.has(path)) {
+          seenPaths.add(path);
+          candidates.push({ path, value: item });
+        }
+        if (item && (typeof item === "object" || Array.isArray(item))) {
+          queue.push({ value: item, path });
+        }
+      }
       continue;
     }
 
-    const record = current.value as Record<string, unknown>;
-    for (const key of ["data", "models", "items", "results"]) {
-      if (key in record) {
-        queue.push({ value: record[key], depth: current.depth + 1 });
-      }
+    if (!current.value || typeof current.value !== "object") {
+      continue;
     }
+
+    if (visited.has(current.value)) {
+      continue;
+    }
+    visited.add(current.value);
+
+    if (looksLikeModelEntry(current.value, current.path) && !seenPaths.has(current.path)) {
+      seenPaths.add(current.path);
+      candidates.push({ path: current.path, value: current.value });
+    }
+
+    const record = current.value as Record<string, unknown>;
+    for (const [key, value] of Object.entries(record)) {
+      if (!value || (typeof value !== "object" && !Array.isArray(value))) {
+        continue;
+      }
+      queue.push({ value, path: appendPath(current.path, key) });
+    }
+
   }
 
-  return [];
+  return candidates;
 }
 
 function normalizeModel(value: unknown): ModelDescriptor | undefined {
   if (typeof value === "string") {
+    if (!looksLikeModelString(value)) {
+      return undefined;
+    }
     return {
       id: value,
       label: value,
@@ -150,19 +192,24 @@ function normalizeModel(value: unknown): ModelDescriptor | undefined {
   }
 
   const record = value as Record<string, unknown>;
-  const id = firstString(record, ["id", "model", "name"]);
-  if (!id) {
+  const identifier = extractModelIdentifier(record);
+  if (!identifier) {
     return undefined;
   }
+  const id = identifier.id;
 
   const label =
     firstString(record, ["label", "display_name", "displayName", "title", "name"]) ?? id;
   const supportedReasoningEfforts = extractReasoningEffortList(record);
+  const defaultReasoningEffort = extractDefaultReasoningEffort(record);
+  const isDefault = firstBoolean(record, ["isDefault", "is_default", "default"]);
   const reasoningEffortSource = supportedReasoningEfforts ? "backend" : "inferred";
 
   return {
     id,
     label,
+    ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+    ...(isDefault !== undefined ? { isDefault } : {}),
     supportedReasoningEfforts:
       supportedReasoningEfforts ?? inferReasoningEffortsForModel(id),
     reasoningEffortSource,
@@ -199,10 +246,49 @@ function extractReasoningEffortList(
         "effort_options",
         "reasoning_efforts",
         "supportedReasoningEfforts",
+        "supportedReasoningOptions",
       ]),
     );
     if (efforts?.length) {
       return efforts;
+    }
+  }
+
+  return undefined;
+}
+
+function extractDefaultReasoningEffort(
+  record: Record<string, unknown>,
+): ReasoningEffort | undefined {
+  const direct = normalizeReasoningEffortValue(
+    firstUnknown(record, [
+      "defaultReasoningEffort",
+      "default_reasoning_effort",
+      "reasoningEffort",
+      "reasoning_effort",
+    ]),
+  );
+  if (direct) {
+    return direct;
+  }
+
+  for (const key of ["reasoning", "capabilities", "metadata"]) {
+    const nested = record[key];
+    if (!nested || typeof nested !== "object" || Array.isArray(nested)) {
+      continue;
+    }
+
+    const nestedRecord = nested as Record<string, unknown>;
+    const effort = normalizeReasoningEffortValue(
+      firstUnknown(nestedRecord, [
+        "default_effort",
+        "default_reasoning_effort",
+        "defaultReasoningEffort",
+        "reasoningEffort",
+      ]),
+    );
+    if (effort) {
+      return effort;
     }
   }
 
@@ -221,6 +307,18 @@ function firstArray(
   return undefined;
 }
 
+function firstBoolean(
+  record: Record<string, unknown>,
+  keys: string[],
+): boolean | undefined {
+  for (const key of keys) {
+    if (typeof record[key] === "boolean") {
+      return record[key] as boolean;
+    }
+  }
+  return undefined;
+}
+
 function firstString(
   record: Record<string, unknown>,
   keys: string[],
@@ -233,32 +331,193 @@ function firstString(
   return undefined;
 }
 
-function looksLikeModelEntry(value: unknown): boolean {
-  if (typeof value === "string") {
+function firstUnknown(
+  record: Record<string, unknown>,
+  keys: string[],
+): unknown {
+  for (const key of keys) {
+    if (key in record) {
+      return record[key];
+    }
+  }
+  return undefined;
+}
+
+function extractModelIdentifier(
+  record: Record<string, unknown>,
+): ModelIdentifier | undefined {
+  const model = firstString(record, ["model"]);
+  if (model) {
+    return { id: model, source: "model" };
+  }
+
+  const slug = firstString(record, ["slug"]);
+  if (slug) {
+    return { id: slug, source: "slug" };
+  }
+
+  const id = firstString(record, ["id"]);
+  if (id) {
+    return { id, source: "id" };
+  }
+
+  const name = firstString(record, ["name"]);
+  if (name && hasModelSignals(record)) {
+    return { id: name, source: "name" };
+  }
+
+  return undefined;
+}
+
+function hasModelSignals(record: Record<string, unknown>): boolean {
+  if (
+    firstString(record, ["displayName", "display_name", "label", "description", "title"]) ||
+    firstBoolean(record, ["isDefault", "is_default", "hidden"]) !== undefined ||
+    firstArray(record, ["supportedReasoningEfforts", "supported_reasoning_efforts", "inputModalities"])
+  ) {
     return true;
+  }
+
+  return ["reasoning", "capabilities", "metadata"].some((key) => {
+    const nested = record[key];
+    return Boolean(nested && typeof nested === "object" && !Array.isArray(nested));
+  });
+}
+
+function looksLikeModelEntry(value: unknown, path: string): boolean {
+  if (typeof value === "string") {
+    return looksLikeModelString(value) && pathLikelyContainsModelHint(path);
   }
   if (!value || typeof value !== "object") {
     return false;
   }
 
   const record = value as Record<string, unknown>;
-  return ["id", "model", "name"].some(
-    (key) => typeof record[key] === "string" && Boolean(record[key]),
-  );
+  const identifier = extractModelIdentifier(record);
+  if (!identifier) {
+    return false;
+  }
+  if (!looksLikeModelString(identifier.id)) {
+    return false;
+  }
+  if (identifier.source === "model" || identifier.source === "slug") {
+    return true;
+  }
+  return hasModelSignals(record) || pathLikelyContainsModelHint(path);
+}
+
+function looksLikeModelString(value: string): boolean {
+  const normalized = value.trim();
+  if (!normalized) {
+    return false;
+  }
+  if (isReasoningEffort(normalized.toLowerCase())) {
+    return false;
+  }
+  return /(?:\d|[-._])/.test(normalized) || /(gpt|codex|o\d|omni)/i.test(normalized);
+}
+
+function pathLikelyContainsModelHint(path: string): boolean {
+  return path === "$" || /\.(data|models?|items?|results?|entries?|groups?)\b/i.test(path);
 }
 
 function normalizeReasoningEffortList(
   values: readonly unknown[] | undefined,
 ): ReasoningEffort[] | undefined {
   const normalized = values
-    ?.map((value) => (typeof value === "string" ? value.trim().toLowerCase() : undefined))
-    .filter((value): value is ReasoningEffort => isReasoningEffort(value));
+    ?.map((value) => normalizeReasoningEffortValue(value))
+    .filter((value): value is ReasoningEffort => value !== undefined);
 
   if (!normalized?.length) {
     return undefined;
   }
 
   return [...new Set(normalized)];
+}
+
+function normalizeReasoningEffortValue(value: unknown): ReasoningEffort | undefined {
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return isReasoningEffort(normalized) ? normalized : undefined;
+  }
+
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const normalized = firstString(record, [
+    "reasoningEffort",
+    "reasoning_effort",
+    "effort",
+    "value",
+    "id",
+    "name",
+  ])
+    ?.trim()
+    .toLowerCase();
+  return isReasoningEffort(normalized) ? normalized : undefined;
+}
+
+function getDefaultReasoningEffort(
+  model: ModelDescriptor,
+  supportedEfforts: ReasoningEffort[],
+): ReasoningEffort | undefined {
+  if (model.defaultReasoningEffort && supportedEfforts.includes(model.defaultReasoningEffort)) {
+    return model.defaultReasoningEffort;
+  }
+  return supportedEfforts[0];
+}
+
+function appendPath(basePath: string, key: string): string {
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key)
+    ? `${basePath}.${key}`
+    : `${basePath}[${JSON.stringify(key)}]`;
+}
+
+function buildModelListError(
+  payload: unknown,
+  contentType: string | undefined,
+  candidates: ModelCandidate[],
+): string {
+  const topLevelKeys =
+    payload && typeof payload === "object" && !Array.isArray(payload)
+      ? Object.keys(payload as Record<string, unknown>).slice(0, 8)
+      : [];
+  const candidatePaths =
+    candidates.length > 0
+      ? candidates.slice(0, 5).map((candidate) => summarizeCandidate(candidate)).join("; ")
+      : "none";
+  const bodyPreview = createBodyPreview(payload);
+
+  return [
+    "model list response did not include any usable models",
+    `(content-type: ${contentType ?? "unknown"}; top-level keys: ${topLevelKeys.join(", ") || "none"}; candidate paths: ${candidatePaths}; body preview: ${bodyPreview})`,
+  ].join(" ");
+}
+
+function summarizeCandidate(candidate: ModelCandidate): string {
+  if (typeof candidate.value === "string") {
+    return `${candidate.path}="${candidate.value}"`;
+  }
+  if (!candidate.value || typeof candidate.value !== "object" || Array.isArray(candidate.value)) {
+    return candidate.path;
+  }
+  return `${candidate.path}{${Object.keys(candidate.value as Record<string, unknown>)
+    .slice(0, 6)
+    .join(",")}}`;
+}
+
+function createBodyPreview(payload: unknown): string {
+  try {
+    const serialized = JSON.stringify(payload);
+    if (!serialized) {
+      return "empty";
+    }
+    return serialized.length > 240 ? `${serialized.slice(0, 240)}...` : serialized;
+  } catch {
+    return String(payload);
+  }
 }
 
 function inferReasoningEffortsForModel(modelId: string | undefined): ReasoningEffort[] {
