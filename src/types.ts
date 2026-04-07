@@ -1,6 +1,14 @@
-export const REQUIRED_MODEL = "gpt-5.4-mini";
-export const REQUIRED_REASONING_EFFORT = "low";
-export const REQUIRED_REASONING_SUMMARY = "auto";
+export const DEFAULT_MODEL = "gpt-5.4-mini";
+export const DEFAULT_REASONING_EFFORT = "low";
+export const DEFAULT_REASONING_SUMMARY = "auto";
+export const REASONING_EFFORT_VALUES = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const;
 export const REFRESH_LEEWAY_MS = 60_000;
 export const DEFAULT_TIMEOUT_MS = 20_000;
 export const DISCOVERY_ENDPOINT = "https://auth.openai.com/.well-known/oauth-authorization-server";
@@ -13,12 +21,23 @@ export const OAUTH_REDIRECT_URI = "http://localhost:1455/auth/callback";
 export const OAUTH_ORIGINATOR = "codex_cli_rs";
 export const AUTH_SECRET_KEY = "codexAutocomplete.oauthSession";
 
+export type ReasoningEffort = typeof REASONING_EFFORT_VALUES[number];
+
 export interface ExtensionSettings {
   enabled: boolean;
+  model: string;
+  reasoningEffort: ReasoningEffort;
   debounceMs: number;
   maxPrefixChars: number;
   maxSuffixChars: number;
   requestTimeoutMs: number;
+}
+
+export interface ModelDescriptor {
+  id: string;
+  label: string;
+  supportedReasoningEfforts?: ReasoningEffort[] | undefined;
+  reasoningEffortSource?: "backend" | "inferred" | undefined;
 }
 
 export interface AuthSessionRecord {

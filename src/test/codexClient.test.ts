@@ -69,6 +69,11 @@ test("CodexResponsesClient creates streamed completion requests and parses delta
     }),
     httpClient,
     createLogger(),
+    {
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low",
+      requestTimeoutMs: 20_000,
+    },
   );
 
   const result = await client.complete({
@@ -124,6 +129,11 @@ test("CodexResponsesClient probe uses the required model without /models preflig
       },
     },
     createLogger(),
+    {
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low",
+      requestTimeoutMs: 20_000,
+    },
   );
 
   await client.probeReady();
@@ -159,6 +169,11 @@ test("CodexResponsesClient fails closed on tool-call events", async () => {
       },
     },
     createLogger(),
+    {
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low",
+      requestTimeoutMs: 20_000,
+    },
   );
 
   await assert.rejects(async () => {
@@ -173,6 +188,58 @@ test("CodexResponsesClient fails closed on tool-call events", async () => {
       cursorCharacter: 1,
     });
   }, /tool calls are unsupported/i);
+});
+
+test("CodexResponsesClient lists models from the Codex backend", async () => {
+  const client = new CodexResponsesClient(
+    new FakeAuthStore({
+      accessToken: "access",
+      refreshToken: "refresh",
+      accountId: "acct",
+      idToken: undefined,
+      expiresAt: undefined,
+      lastRefresh: undefined,
+    }),
+    {
+      async request(options: HttpRequestOptions): Promise<HttpResponse> {
+        assert.equal(options.method, "GET");
+        assert.match(options.url, /\/models$/);
+        assert.equal(options.headers?.Accept, "application/json");
+        return {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+          bodyText: JSON.stringify({
+            data: [
+              {
+                id: "gpt-5.4-mini",
+                label: "GPT-5.4 Mini",
+                supported_reasoning_efforts: ["minimal", "low", "medium", "high"],
+              },
+            ],
+          }),
+        };
+      },
+    },
+    createLogger(),
+    {
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low",
+      requestTimeoutMs: 20_000,
+    },
+  );
+
+  const models = await client.listModels();
+
+  assert.deepEqual(models, [
+    {
+      id: "gpt-5.4-mini",
+      label: "GPT-5.4 Mini",
+      supportedReasoningEfforts: ["minimal", "low", "medium", "high"],
+      reasoningEffortSource: "backend",
+    },
+  ]);
 });
 
 function createLogger() {

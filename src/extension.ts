@@ -4,6 +4,7 @@ import { CodexAuthStore } from "./auth";
 import { CodexResponsesClient } from "./codexClient";
 import { NodeHttpClient } from "./http";
 import { OutputLogger } from "./log";
+import { normalizeModelId, normalizeReasoningEffort } from "./models";
 import { CodexAutocompleteService } from "./service";
 import type { AuthUi, ExtensionSettings, SecretStore } from "./types";
 
@@ -21,7 +22,11 @@ export function activate(context: vscode.ExtensionContext): void {
     authStore,
     httpClient,
     logger,
-    settings.requestTimeoutMs,
+    {
+      model: settings.model,
+      reasoningEffort: settings.reasoningEffort,
+      requestTimeoutMs: settings.requestTimeoutMs,
+    },
   );
   const service = new CodexAutocompleteService(client, logger, settings);
 
@@ -54,6 +59,12 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("codexAutocomplete.openLogs", () => {
       service.showLogs();
     }),
+    vscode.commands.registerCommand("codexAutocomplete.selectModel", async () => {
+      await service.selectModel();
+    }),
+    vscode.commands.registerCommand("codexAutocomplete.selectReasoningEffort", async () => {
+      await service.selectReasoningEffort();
+    }),
     vscode.commands.registerCommand("codexAutocomplete.acceptNextWord", async () => {
       await service.acceptNextWord();
     }),
@@ -74,6 +85,10 @@ function readSettings(): ExtensionSettings {
   const config = vscode.workspace.getConfiguration("codexAutocomplete");
   return {
     enabled: config.get<boolean>("enabled", true),
+    model: normalizeModelId(config.get<string>("model")),
+    reasoningEffort: normalizeReasoningEffort(
+      config.get<string>("reasoningEffort"),
+    ),
     debounceMs: config.get<number>("debounceMs", 250),
     maxPrefixChars: config.get<number>("maxPrefixChars", 4000),
     maxSuffixChars: config.get<number>("maxSuffixChars", 1200),

@@ -2,7 +2,7 @@
   "name": "codex-tab",
   "displayName": "Codex Tab",
   "description": "code-server-only ghost text autocomplete backed by Codex OAuth PKCE sign-in.",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "publisher": "smturtle2",
   "license": "Apache-2.0",
   "repository": {
@@ -32,6 +32,8 @@
     "onCommand:codexAutocomplete.checkSetup",
     "onCommand:codexAutocomplete.reloadAuth",
     "onCommand:codexAutocomplete.openLogs",
+    "onCommand:codexAutocomplete.selectModel",
+    "onCommand:codexAutocomplete.selectReasoningEffort",
     "onCommand:codexAutocomplete.acceptNextWord",
     "onLanguage:*"
   ],
@@ -58,6 +60,14 @@
         "title": "Codex Autocomplete: Open Logs"
       },
       {
+        "command": "codexAutocomplete.selectModel",
+        "title": "Codex Autocomplete: Select Model"
+      },
+      {
+        "command": "codexAutocomplete.selectReasoningEffort",
+        "title": "Codex Autocomplete: Select Reasoning Effort"
+      },
+      {
         "command": "codexAutocomplete.acceptNextWord",
         "title": "Codex Autocomplete: Accept Next Word"
       }
@@ -70,29 +80,55 @@
           "default": true,
           "description": "Enable Codex Tab inline completions."
         },
+        "codexAutocomplete.model": {
+          "type": "string",
+          "default": "gpt-5.4-mini",
+          "description": "Model used for inline completions. Use the \"Codex Autocomplete: Select Model\" command to browse the live account model list."
+        },
+        "codexAutocomplete.reasoningEffort": {
+          "type": "string",
+          "default": "low",
+          "enum": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "enumDescriptions": [
+            "Disable model reasoning when supported by the selected model.",
+            "Use the lightest supported reasoning for fast completions.",
+            "Use low reasoning effort.",
+            "Use medium reasoning effort.",
+            "Use high reasoning effort.",
+            "Use the highest supported reasoning effort."
+          ],
+          "description": "Reasoning effort sent with completion requests. Use the \"Codex Autocomplete: Select Reasoning Effort\" command for a model-aware menu."
+        },
         "codexAutocomplete.debounceMs": {
           "type": "number",
           "default": 250,
           "minimum": 0,
-          "description": "Debounce before sending a completion request."
+          "description": "Wait time before sending an inline completion request."
         },
         "codexAutocomplete.maxPrefixChars": {
           "type": "number",
           "default": 4000,
           "minimum": 256,
-          "description": "Maximum prefix characters sent to Codex."
+          "description": "Maximum prefix context characters sent to Codex."
         },
         "codexAutocomplete.maxSuffixChars": {
           "type": "number",
           "default": 1200,
           "minimum": 0,
-          "description": "Maximum suffix characters sent to Codex."
+          "description": "Maximum suffix context characters sent to Codex."
         },
         "codexAutocomplete.requestTimeoutMs": {
           "type": "number",
           "default": 20000,
           "minimum": 1000,
-          "description": "HTTP timeout for model and completion requests."
+          "description": "HTTP timeout for model list, setup probe, and completion requests."
         }
       }
     },

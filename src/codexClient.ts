@@ -3,18 +3,21 @@ import type {
   AuthStore,
   CompletionRequest,
   CompletionResult,
+  ExtensionSettings,
   HttpClient,
   HttpResponse,
   LoggerLike,
+  ModelDescriptor,
 } from "./types";
 import {
+  DEFAULT_MODEL,
+  DEFAULT_REASONING_EFFORT,
+  DEFAULT_REASONING_SUMMARY,
   DEFAULT_TIMEOUT_MS,
-  REQUIRED_MODEL,
-  REQUIRED_REASONING_EFFORT,
-  REQUIRED_REASONING_SUMMARY,
   RESPONSES_BASE_URL,
 } from "./types";
 import { assertOk } from "./http";
+import { normalizeModelId, parseModelListResponse } from "./models";
 import { buildPrompt } from "./prompts";
 import { normalizeCompletionText, parseSseEvents } from "./util";
 
@@ -35,26 +38,57 @@ export class CodexResponsesClient {
   private readonly httpClient: HttpClient;
   private readonly logger: LoggerLike;
   private timeoutMs: number;
+  private model: string;
+  private reasoningEffort: ExtensionSettings["reasoningEffort"];
 
   public constructor(
     authStore: AuthStore,
     httpClient: HttpClient,
     logger: LoggerLike,
-    timeoutMs = DEFAULT_TIMEOUT_MS,
+    settings?: Pick<
+      ExtensionSettings,
+      "model" | "reasoningEffort" | "requestTimeoutMs"
+    >,
   ) {
     this.authStore = authStore;
     this.httpClient = httpClient;
     this.logger = logger;
-    this.timeoutMs = timeoutMs;
+    this.timeoutMs = settings?.requestTimeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.model = normalizeModelId(settings?.model ?? DEFAULT_MODEL);
+    this.reasoningEffort = settings?.reasoningEffort ?? DEFAULT_REASONING_EFFORT;
   }
 
   public invalidate(): void {
     this.authStore.invalidate();
   }
 
-  public updateConfig(timeoutMs: number): void {
-    this.timeoutMs = timeoutMs;
+  public updateConfig(
+    settings: Pick<ExtensionSettings, "model" | "reasoningEffort" | "requestTimeoutMs">,
+  ): void {
+    this.timeoutMs = settings.requestTimeoutMs;
+    this.model = normalizeModelId(settings.model);
+    this.reasoningEffort = settings.reasoningEffort;
     this.invalidate();
+  }
+
+  public async listModels(signal?: AbortSignal): Promise<ModelDescriptor[]> {
+    const response = await this.withAuthRetry(
+      async (snapshot) =>
+        await this.httpClient.request({
+          method: "GET",
+          url: `${RESPONSES_BASE_URL}/models`,
+          headers: {
+            ...buildAuthHeaders(snapshot),
+            Accept: "application/json",
+          },
+          timeoutMs: this.timeoutMs,
+          signal,
+        }),
+      signal,
+    );
+
+    assertOk(response, "model list request failed");
+    return parseModelListResponse(response);
   }
 
   public async hasSession(): Promise<boolean> {
@@ -73,15 +107,15 @@ export class CodexResponsesClient {
   public async probeReady(signal?: AbortSignal): Promise<void> {
     await this.requestStreamedText(
       {
-        model: REQUIRED_MODEL,
+        model: this.model,
         instructions: "Reply with exactly OK.",
         input: [{ role: "user", content: "Reply with exactly OK." }],
         tools: [],
         tool_choice: "none",
         parallel_tool_calls: false,
         reasoning: {
-          effort: REQUIRED_REASONING_EFFORT,
-          summary: REQUIRED_REASONING_SUMMARY,
+          effort: this.reasoningEffort,
+          summary: DEFAULT_REASONING_SUMMARY,
         },
         store: false,
         stream: true,
@@ -98,15 +132,15 @@ export class CodexResponsesClient {
     const prompt = buildPrompt(request);
     const rawText = await this.requestStreamedText(
       {
-        model: REQUIRED_MODEL,
+        model: this.model,
         instructions: prompt.instructions,
         input: [{ role: "user", content: prompt.input }],
         tools: [],
         tool_choice: "none",
         parallel_tool_calls: false,
         reasoning: {
-          effort: REQUIRED_REASONING_EFFORT,
-          summary: REQUIRED_REASONING_SUMMARY,
+          effort: this.reasoningEffort,
+          summary: DEFAULT_REASONING_SUMMARY,
         },
         store: false,
         stream: true,

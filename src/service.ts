@@ -3,8 +3,13 @@ import * as vscode from "vscode";
 
 import { AuthRequiredError } from "./auth";
 import { CodexResponsesClient } from "./codexClient";
-import type { CompletionRequest, ExtensionSettings } from "./types";
-import { REQUIRED_MODEL } from "./types";
+import {
+  findModelDescriptor,
+  formatReasoningEffortLabel,
+  getReasoningEffortsForModel,
+  validateConfiguredModel,
+} from "./models";
+import type { CompletionRequest, ExtensionSettings, ModelDescriptor } from "./types";
 import { buildRelativePathLabel, delay, isAbortError, trimSuggestion } from "./util";
 import type { OutputLogger } from "./log";
 
@@ -18,6 +23,8 @@ export class CodexAutocompleteService {
   private requestSeq = 0;
   private inflight: AbortController | undefined;
   private setupPromise: Promise<void> | undefined;
+  private modelCache: ModelDescriptor[] | undefined;
+  private modelCachePromise: Promise<ModelDescriptor[]> | undefined;
   private disabledReason: string | undefined;
 
   public constructor(
@@ -44,8 +51,14 @@ export class CodexAutocompleteService {
 
   public updateSettings(settings: ExtensionSettings): void {
     this.settings = settings;
-    this.client.updateConfig(settings.requestTimeoutMs);
+    this.client.updateConfig({
+      model: settings.model,
+      reasoningEffort: settings.reasoningEffort,
+      requestTimeoutMs: settings.requestTimeoutMs,
+    });
     this.setupPromise = undefined;
+    this.modelCache = undefined;
+    this.modelCachePromise = undefined;
     this.disabledReason = undefined;
     this.renderStatus("idle");
     void this.checkSetup(false);
@@ -101,6 +114,70 @@ export class CodexAutocompleteService {
 
   public showLogs(): void {
     this.logger.show();
+  }
+
+  public async selectModel(): Promise<void> {
+    try {
+      const models = await this.loadModels(true);
+      const selected = await vscode.window.showQuickPick(
+        models.map((model) => ({
+          label: model.label,
+          description: model.id === this.settings.model ? "Current" : model.id,
+          detail: describeReasoningSupport(model),
+          model,
+        })),
+        {
+          title: "Codex Tab Model",
+          placeHolder: "Select the model used for inline completions.",
+          matchOnDescription: true,
+          matchOnDetail: true,
+        },
+      );
+      if (!selected) {
+        return;
+      }
+
+      await this.updateSetting("model", selected.model.id);
+      const supportedEfforts = getReasoningEffortsForModel(selected.model);
+      if (!supportedEfforts.includes(this.settings.reasoningEffort)) {
+        void vscode.window.showWarningMessage(
+          `Model ${selected.model.id} may not support reasoning effort "${this.settings.reasoningEffort}". Run "Codex Autocomplete: Select Reasoning Effort" to adjust it.`,
+        );
+      }
+    } catch (error) {
+      await this.handleSettingsActionError(error, "load model list");
+    }
+  }
+
+  public async selectReasoningEffort(): Promise<void> {
+    try {
+      const model = await this.getConfiguredModel();
+      const reasoningEfforts = getReasoningEffortsForModel(model, this.settings.model);
+      const selected = await vscode.window.showQuickPick(
+        reasoningEfforts.map((effort) => ({
+          label: formatReasoningEffortLabel(effort),
+          description: effort === this.settings.reasoningEffort ? "Current" : effort,
+          detail:
+            model.reasoningEffortSource === "backend"
+              ? `Supported by ${model.id}`
+              : `Shown using inferred support for ${this.settings.model}`,
+          effort,
+        })),
+        {
+          title: "Codex Tab Reasoning Effort",
+          placeHolder: `Select reasoning effort for ${this.settings.model}.`,
+          matchOnDescription: true,
+          matchOnDetail: true,
+        },
+      );
+      if (!selected) {
+        return;
+      }
+
+      await this.updateSetting("reasoningEffort", selected.effort);
+    } catch (error) {
+      await this.handleSettingsActionError(error, "load reasoning options");
+    }
   }
 
   public async checkSetup(interactive: boolean): Promise<void> {
@@ -232,12 +309,18 @@ export class CodexAutocompleteService {
         throw new AuthRequiredError();
       }
 
+      const models = await this.loadModels(false);
+      const model = validateConfiguredModel(
+        models,
+        this.settings.model,
+        this.settings.reasoningEffort,
+      );
       await this.client.probeReady();
       this.disabledReason = undefined;
       this.renderStatus("ready");
       if (interactive) {
         void vscode.window.showInformationMessage(
-          `Codex Tab is ready. Model ${REQUIRED_MODEL} is available.`,
+          `Codex Tab is ready. Model ${model.id} is available with ${this.settings.reasoningEffort} reasoning.`,
         );
       }
     } catch (error) {
@@ -298,38 +381,119 @@ export class CodexAutocompleteService {
     };
   }
 
+  private async loadModels(forceRefresh: boolean): Promise<ModelDescriptor[]> {
+    if (!forceRefresh && this.modelCache) {
+      return this.modelCache;
+    }
+    if (!forceRefresh && this.modelCachePromise) {
+      return await this.modelCachePromise;
+    }
+
+    const promise = this.client.listModels().then((models) => {
+      this.modelCache = models;
+      return models;
+    });
+    this.modelCachePromise = promise;
+
+    try {
+      return await promise;
+    } finally {
+      if (this.modelCachePromise === promise) {
+        this.modelCachePromise = undefined;
+      }
+    }
+  }
+
+  private async getConfiguredModel(): Promise<ModelDescriptor> {
+    const models = await this.loadModels(false);
+    const model = findModelDescriptor(models, this.settings.model);
+    if (!model) {
+      throw new Error(`Configured model "${this.settings.model}" is not available for this account.`);
+    }
+    return model;
+  }
+
+  private async updateSetting(
+    key: "model" | "reasoningEffort",
+    value: string,
+  ): Promise<void> {
+    await vscode.workspace
+      .getConfiguration("codexAutocomplete")
+      .update(key, value, vscode.ConfigurationTarget.Global);
+  }
+
+  private async handleSettingsActionError(
+    error: unknown,
+    action: string,
+  ): Promise<void> {
+    const message = error instanceof Error ? error.message : String(error);
+    this.logger.error(`Could not ${action}: ${message}`);
+    if (error instanceof AuthRequiredError) {
+      this.renderStatus("needs-auth");
+      const selected = await vscode.window.showInformationMessage(
+        "Codex Tab requires sign-in before settings can be loaded.",
+        "Sign In",
+      );
+      if (selected === "Sign In") {
+        void this.signIn(true);
+      }
+      return;
+    }
+
+    void vscode.window.showErrorMessage(`Codex Tab could not ${action}: ${message}`);
+  }
+
   private renderStatus(state: StatusState, detail?: string): void {
     switch (state) {
       case "idle":
         this.statusBar.command = "codexAutocomplete.checkSetup";
         this.statusBar.text = "$(sparkle) Codex Tab";
-        this.statusBar.tooltip = "Codex Tab is idle.";
+        this.statusBar.tooltip = this.buildStatusTooltip("Codex Tab is idle.");
         break;
       case "running":
         this.statusBar.command = "codexAutocomplete.checkSetup";
         this.statusBar.text = `$(sync~spin) Codex Tab${detail ? `: ${detail}` : ""}`;
-        this.statusBar.tooltip = "Codex Tab is checking setup or generating a completion.";
+        this.statusBar.tooltip = this.buildStatusTooltip(
+          "Codex Tab is checking setup or generating a completion.",
+        );
         break;
       case "ready":
         this.statusBar.command = "codexAutocomplete.checkSetup";
         this.statusBar.text = "$(sparkle-filled) Codex Tab";
-        this.statusBar.tooltip = "Codex Tab is ready.";
+        this.statusBar.tooltip = this.buildStatusTooltip("Codex Tab is ready.");
         break;
       case "disabled":
         this.statusBar.command = "codexAutocomplete.checkSetup";
         this.statusBar.text = `$(circle-slash) Codex Tab${detail ? `: ${detail}` : ""}`;
-        this.statusBar.tooltip = "Codex Tab is disabled by settings.";
+        this.statusBar.tooltip = this.buildStatusTooltip("Codex Tab is disabled by settings.");
         break;
       case "needs-auth":
         this.statusBar.command = "codexAutocomplete.signIn";
         this.statusBar.text = "$(account) Codex Tab: sign in";
-        this.statusBar.tooltip = this.disabledReason ?? "Codex Tab requires sign-in.";
+        this.statusBar.tooltip = this.buildStatusTooltip(
+          this.disabledReason ?? "Codex Tab requires sign-in.",
+        );
         break;
       case "error":
         this.statusBar.command = "codexAutocomplete.checkSetup";
         this.statusBar.text = `$(warning) Codex Tab${detail ? `: ${detail}` : ""}`;
-        this.statusBar.tooltip = this.disabledReason ?? "Codex Tab setup failed.";
+        this.statusBar.tooltip = this.buildStatusTooltip(
+          this.disabledReason ?? "Codex Tab setup failed.",
+        );
         break;
     }
   }
+
+  private buildStatusTooltip(summary: string): string {
+    return [summary, `Model: ${this.settings.model}`, `Reasoning: ${this.settings.reasoningEffort}`]
+      .filter(Boolean)
+      .join("\n");
+  }
+}
+
+function describeReasoningSupport(model: ModelDescriptor): string {
+  const efforts = getReasoningEffortsForModel(model);
+  const source =
+    model.reasoningEffortSource === "backend" ? "reported by backend" : "inferred";
+  return `Reasoning: ${efforts.join(", ")} (${source})`;
 }
