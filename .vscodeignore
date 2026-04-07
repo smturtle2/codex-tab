@@ -1,0 +1,6 @@
+src/**
+out/**
+node_modules/**
+*.ts
+tsconfig.json
+esbuild.mjs

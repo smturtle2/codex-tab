@@ -1,0 +1,118 @@
+{
+  "name": "codex-tab",
+  "displayName": "Codex Tab",
+  "description": "code-server-only ghost text autocomplete backed by Codex OAuth auth.json tokens.",
+  "version": "0.0.1",
+  "publisher": "smturtle2",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/smturtle2/codex-tab.git"
+  },
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "codex",
+    "autocomplete",
+    "code-server",
+    "ghost-text"
+  ],
+  "main": "./dist/extension.js",
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:codexAutocomplete.checkSetup",
+    "onCommand:codexAutocomplete.reloadAuth",
+    "onCommand:codexAutocomplete.openLogs",
+    "onCommand:codexAutocomplete.acceptNextWord",
+    "onLanguage:*"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "codexAutocomplete.checkSetup",
+        "title": "Codex Autocomplete: Check Setup"
+      },
+      {
+        "command": "codexAutocomplete.reloadAuth",
+        "title": "Codex Autocomplete: Reload Auth"
+      },
+      {
+        "command": "codexAutocomplete.openLogs",
+        "title": "Codex Autocomplete: Open Logs"
+      },
+      {
+        "command": "codexAutocomplete.acceptNextWord",
+        "title": "Codex Autocomplete: Accept Next Word"
+      }
+    ],
+    "configuration": {
+      "title": "Codex Autocomplete",
+      "properties": {
+        "codexAutocomplete.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Codex Tab inline completions."
+        },
+        "codexAutocomplete.debounceMs": {
+          "type": "number",
+          "default": 250,
+          "minimum": 0,
+          "description": "Debounce before sending a completion request."
+        },
+        "codexAutocomplete.maxPrefixChars": {
+          "type": "number",
+          "default": 4000,
+          "minimum": 256,
+          "description": "Maximum prefix characters sent to Codex."
+        },
+        "codexAutocomplete.maxSuffixChars": {
+          "type": "number",
+          "default": 1200,
+          "minimum": 0,
+          "description": "Maximum suffix characters sent to Codex."
+        },
+        "codexAutocomplete.authFilePath": {
+          "type": "string",
+          "default": "~/.codex/auth.json",
+          "description": "Absolute or ~-prefixed path to the Codex auth.json file."
+        },
+        "codexAutocomplete.requestTimeoutMs": {
+          "type": "number",
+          "default": 20000,
+          "minimum": 1000,
+          "description": "HTTP timeout for model and completion requests."
+        }
+      }
+    },
+    "keybindings": [
+      {
+        "command": "codexAutocomplete.acceptNextWord",
+        "key": "shift+tab",
+        "when": "inlineSuggestionVisible && editorTextFocus"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node ./esbuild.mjs",
+    "watch": "node ./esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/test/**/*.test.ts",
+    "package:vsix": "npm run build && vsce package --no-dependencies",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "@types/vscode": "^1.96.0",
+    "@vscode/vsce": "^2.31.1",
+    "esbuild": "^0.25.2",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  }
+}
