@@ -2,16 +2,31 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { buildPrompt } from "../prompts";
-import { parseStructuredCompletion, trimSuggestion } from "../util";
+import { normalizeCompletionText, parseSseEvents, trimSuggestion } from "../util";
 
 test("trimSuggestion removes repeated prefix overlap and suffix overlap", () => {
   const trimmed = trimSuggestion("console.", "console.log(value);", "value);");
   assert.equal(trimmed, "log(");
 });
 
-test("parseStructuredCompletion accepts fenced JSON", () => {
-  const result = parseStructuredCompletion('```json\n{"completion":"hello"}\n```');
-  assert.equal(result.completion, "hello");
+test("normalizeCompletionText strips surrounding markdown fences", () => {
+  const result = normalizeCompletionText("```ts\nhello()\n```");
+  assert.equal(result, "hello()");
+});
+
+test("parseSseEvents splits event stream blocks", () => {
+  const events = parseSseEvents([
+    'event: response.output_text.delta',
+    'data: {"delta":"foo"}',
+    "",
+    'event: response.completed',
+    'data: {"response":{"error":null}}',
+    "",
+  ].join("\n"));
+
+  assert.equal(events.length, 2);
+  assert.equal(events[0]?.event, "response.output_text.delta");
+  assert.match(events[0]?.dataText ?? "", /"delta":"foo"/);
 });
 
 test("buildPrompt includes language, file, prefix, and suffix", () => {

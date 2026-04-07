@@ -1,18 +1,7 @@
-import * as os from "node:os";
 import * as path from "node:path";
 import { Buffer } from "node:buffer";
 
-import type { CompletionResult } from "./types";
-
-export function expandHome(filePath: string): string {
-  if (filePath === "~") {
-    return os.homedir();
-  }
-  if (filePath.startsWith("~/")) {
-    return path.join(os.homedir(), filePath.slice(2));
-  }
-  return filePath;
-}
+import type { SseEvent } from "./types";
 
 export function parseJwtClaims(jwt: string): Record<string, unknown> | undefined {
   const parts = jwt.split(".");
@@ -24,8 +13,7 @@ export function parseJwtClaims(jwt: string): Record<string, unknown> | undefined
     const normalized = parts[1].replace(/-/g, "+").replace(/_/g, "/");
     const padding = normalized.length % 4 === 0 ? "" : "=".repeat(4 - (normalized.length % 4));
     const payload = Buffer.from(normalized + padding, "base64").toString("utf8");
-    const parsed = JSON.parse(payload) as Record<string, unknown>;
-    return parsed;
+    return JSON.parse(payload) as Record<string, unknown>;
   } catch {
     return undefined;
   }
@@ -43,14 +31,13 @@ export function extractAccountId(jwt?: string): string | undefined {
       ? (claims["https://api.openai.com/auth"] as Record<string, unknown>)
       : undefined;
 
-  const accountId =
-    typeof auth?.chatgpt_account_id === "string"
-      ? auth.chatgpt_account_id
-      : typeof auth?.account_id === "string"
-        ? auth.account_id
-        : undefined;
-
-  return accountId || undefined;
+  if (typeof auth?.chatgpt_account_id === "string" && auth.chatgpt_account_id) {
+    return auth.chatgpt_account_id;
+  }
+  if (typeof auth?.account_id === "string" && auth.account_id) {
+    return auth.account_id;
+  }
+  return undefined;
 }
 
 export function extractExpirationMs(jwt?: string): number | undefined {
@@ -67,40 +54,49 @@ export function extractExpirationMs(jwt?: string): number | undefined {
 
 export function stripMarkdownCodeFence(input: string): string {
   const trimmed = input.trim();
-  if (!trimmed.startsWith("```")) {
-    return trimmed;
+  if (!trimmed.startsWith("```") || !trimmed.endsWith("```")) {
+    return input;
   }
 
   const lines = trimmed.split(/\r?\n/u);
   if (lines.length < 3) {
-    return trimmed;
+    return input;
   }
-  if (!lines.at(-1)?.startsWith("```")) {
-    return trimmed;
-  }
-  return lines.slice(1, -1).join("\n").trim();
+  return lines.slice(1, -1).join("\n");
 }
 
-export function parseStructuredCompletion(rawText: string): CompletionResult {
-  const normalized = stripMarkdownCodeFence(rawText);
-  const candidate = extractJsonObject(normalized);
-  const parsed = JSON.parse(candidate) as Record<string, unknown>;
-  if (typeof parsed.completion !== "string") {
-    throw new Error("structured completion payload is missing string field `completion`");
-  }
-  return {
-    completion: parsed.completion,
-    rawText,
-  };
+export function normalizeCompletionText(rawText: string): string {
+  return stripMarkdownCodeFence(rawText);
 }
 
-function extractJsonObject(text: string): string {
-  const first = text.indexOf("{");
-  const last = text.lastIndexOf("}");
-  if (first >= 0 && last > first) {
-    return text.slice(first, last + 1);
+export function parseSseEvents(bodyText: string): SseEvent[] {
+  const blocks = bodyText.replace(/\r\n/g, "\n").split("\n\n");
+  const events: SseEvent[] = [];
+
+  for (const block of blocks) {
+    if (!block.trim()) {
+      continue;
+    }
+
+    let event = "message";
+    const dataLines: string[] = [];
+    for (const line of block.split("\n")) {
+      if (line.startsWith("event:")) {
+        event = line.slice("event:".length).trim();
+        continue;
+      }
+      if (line.startsWith("data:")) {
+        dataLines.push(line.slice("data:".length).trimStart());
+      }
+    }
+
+    events.push({
+      event,
+      dataText: dataLines.join("\n"),
+    });
   }
-  return text;
+
+  return events;
 }
 
 export function trimSuggestion(

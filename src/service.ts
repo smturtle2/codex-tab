@@ -1,11 +1,14 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
 
+import { AuthRequiredError } from "./auth";
 import { CodexResponsesClient } from "./codexClient";
 import type { CompletionRequest, ExtensionSettings } from "./types";
-import { buildRelativePathLabel, delay, isAbortError, trimSuggestion } from "./util";
 import { REQUIRED_MODEL } from "./types";
+import { buildRelativePathLabel, delay, isAbortError, trimSuggestion } from "./util";
 import type { OutputLogger } from "./log";
+
+type StatusState = "idle" | "running" | "ready" | "error" | "disabled" | "needs-auth";
 
 export class CodexAutocompleteService {
   private readonly client: CodexResponsesClient;
@@ -26,7 +29,6 @@ export class CodexAutocompleteService {
     this.logger = logger;
     this.settings = settings;
     this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 50);
-    this.statusBar.command = "codexAutocomplete.checkSetup";
     this.statusBar.show();
     this.renderStatus("idle");
   }
@@ -42,18 +44,56 @@ export class CodexAutocompleteService {
 
   public updateSettings(settings: ExtensionSettings): void {
     this.settings = settings;
-    this.client.updateConfig(settings.authFilePath, settings.requestTimeoutMs);
+    this.client.updateConfig(settings.requestTimeoutMs);
     this.setupPromise = undefined;
     this.disabledReason = undefined;
     this.renderStatus("idle");
     void this.checkSetup(false);
   }
 
+  public async signIn(interactive: boolean): Promise<void> {
+    if (!this.settings.enabled) {
+      this.renderStatus("disabled", "disabled");
+      return;
+    }
+
+    this.renderStatus("running", "signing in");
+    try {
+      await this.client.signIn();
+      this.setupPromise = undefined;
+      this.disabledReason = undefined;
+      await this.checkSetup(interactive);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Sign-in failed: ${message}`);
+      this.disabledReason = message;
+      if (/cancelled/i.test(message)) {
+        this.renderStatus("needs-auth");
+        if (interactive) {
+          void vscode.window.showInformationMessage("Codex Tab sign-in was cancelled.");
+        }
+        return;
+      }
+      this.renderStatus("error", "sign in");
+      if (interactive) {
+        void vscode.window.showErrorMessage(`Codex Tab sign-in failed: ${message}`);
+      }
+      throw error;
+    }
+  }
+
+  public async signOut(interactive: boolean): Promise<void> {
+    await this.client.signOut();
+    this.setupPromise = undefined;
+    this.disabledReason = "sign in required";
+    this.renderStatus("needs-auth");
+    if (interactive) {
+      void vscode.window.showInformationMessage("Codex Tab signed out.");
+    }
+  }
+
   public async reloadAuth(interactive: boolean): Promise<void> {
-    this.client.updateConfig(
-      this.settings.authFilePath,
-      this.settings.requestTimeoutMs,
-    );
+    this.client.invalidate();
     this.setupPromise = undefined;
     this.disabledReason = undefined;
     await this.checkSetup(interactive);
@@ -145,7 +185,11 @@ export class CodexAutocompleteService {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error(`Completion failed: ${message}`);
       this.disabledReason = message;
-      this.renderStatus("error", "request failed");
+      if (error instanceof AuthRequiredError) {
+        this.renderStatus("needs-auth");
+      } else {
+        this.renderStatus("error", "request failed");
+      }
       return undefined;
     } finally {
       if (this.inflight === abortController) {
@@ -184,7 +228,11 @@ export class CodexAutocompleteService {
 
     this.renderStatus("running", "checking");
     try {
-      await this.client.ensureModelAvailable();
+      if (!(await this.client.hasSession())) {
+        throw new AuthRequiredError();
+      }
+
+      await this.client.probeReady();
       this.disabledReason = undefined;
       this.renderStatus("ready");
       if (interactive) {
@@ -196,9 +244,22 @@ export class CodexAutocompleteService {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error(`Setup check failed: ${message}`);
       this.disabledReason = message;
-      this.renderStatus("error", "check setup");
-      if (interactive) {
-        void vscode.window.showErrorMessage(`Codex Tab setup failed: ${message}`);
+      if (error instanceof AuthRequiredError) {
+        this.renderStatus("needs-auth");
+        if (interactive) {
+          const action = await vscode.window.showInformationMessage(
+            "Codex Tab requires sign-in before completions can run.",
+            "Sign In",
+          );
+          if (action === "Sign In") {
+            void this.signIn(true);
+          }
+        }
+      } else {
+        this.renderStatus("error", "check setup");
+        if (interactive) {
+          void vscode.window.showErrorMessage(`Codex Tab setup failed: ${message}`);
+        }
       }
       throw error;
     }
@@ -237,28 +298,35 @@ export class CodexAutocompleteService {
     };
   }
 
-  private renderStatus(
-    state: "idle" | "running" | "ready" | "error" | "disabled",
-    detail?: string,
-  ): void {
+  private renderStatus(state: StatusState, detail?: string): void {
     switch (state) {
       case "idle":
+        this.statusBar.command = "codexAutocomplete.checkSetup";
         this.statusBar.text = "$(sparkle) Codex Tab";
         this.statusBar.tooltip = "Codex Tab is idle.";
         break;
       case "running":
+        this.statusBar.command = "codexAutocomplete.checkSetup";
         this.statusBar.text = `$(sync~spin) Codex Tab${detail ? `: ${detail}` : ""}`;
         this.statusBar.tooltip = "Codex Tab is checking setup or generating a completion.";
         break;
       case "ready":
+        this.statusBar.command = "codexAutocomplete.checkSetup";
         this.statusBar.text = "$(sparkle-filled) Codex Tab";
         this.statusBar.tooltip = "Codex Tab is ready.";
         break;
       case "disabled":
+        this.statusBar.command = "codexAutocomplete.checkSetup";
         this.statusBar.text = `$(circle-slash) Codex Tab${detail ? `: ${detail}` : ""}`;
         this.statusBar.tooltip = "Codex Tab is disabled by settings.";
         break;
+      case "needs-auth":
+        this.statusBar.command = "codexAutocomplete.signIn";
+        this.statusBar.text = "$(account) Codex Tab: sign in";
+        this.statusBar.tooltip = this.disabledReason ?? "Codex Tab requires sign-in.";
+        break;
       case "error":
+        this.statusBar.command = "codexAutocomplete.checkSetup";
         this.statusBar.text = `$(warning) Codex Tab${detail ? `: ${detail}` : ""}`;
         this.statusBar.tooltip = this.disabledReason ?? "Codex Tab setup failed.";
         break;

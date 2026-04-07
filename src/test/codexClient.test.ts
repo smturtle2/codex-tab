@@ -2,12 +2,21 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { CodexResponsesClient } from "../codexClient";
-import type { AuthSnapshot, HttpClient, HttpRequestOptions, HttpResponse } from "../types";
+import type {
+  AuthSnapshot,
+  HttpClient,
+  HttpRequestOptions,
+  HttpResponse,
+} from "../types";
 
 class FakeAuthStore {
   public constructor(private readonly snapshot: AuthSnapshot) {}
 
   public invalidate(): void {}
+
+  public async hasSession(): Promise<boolean> {
+    return true;
+  }
 
   public async ensureValid(): Promise<AuthSnapshot> {
     return this.snapshot;
@@ -16,42 +25,47 @@ class FakeAuthStore {
   public async forceRefresh(): Promise<AuthSnapshot> {
     return this.snapshot;
   }
+
+  public async signIn(): Promise<AuthSnapshot> {
+    return this.snapshot;
+  }
+
+  public async signOut(): Promise<void> {}
 }
 
-test("CodexResponsesClient validates model list and creates completion request", async () => {
+test("CodexResponsesClient creates streamed completion requests and parses deltas", async () => {
   const requests: HttpRequestOptions[] = [];
   const httpClient: HttpClient = {
     async request(options: HttpRequestOptions): Promise<HttpResponse> {
       requests.push(options);
-      if (options.url.includes("/models")) {
-        return {
-          status: 200,
-          headers: {},
-          bodyText: JSON.stringify({
-            data: [{ id: "gpt-5.4-mini" }],
-          }),
-        };
-      }
-
       return {
         status: 200,
-        headers: {},
-        bodyText: JSON.stringify({
-          output_text: '{"completion":"foo()"}',
-        }),
+        headers: {
+          "content-type": "text/event-stream",
+        },
+        bodyText: [
+          'event: response.created',
+          'data: {"type":"response.created"}',
+          "",
+          'event: response.output_text.delta',
+          'data: {"type":"response.output_text.delta","delta":"foo()"}',
+          "",
+          'event: response.completed',
+          'data: {"type":"response.completed","response":{"error":null}}',
+          "",
+        ].join("\n"),
       };
     },
   };
 
   const client = new CodexResponsesClient(
     new FakeAuthStore({
-      authFilePath: "/tmp/auth.json",
       accessToken: "access",
       refreshToken: "refresh",
       accountId: "acct",
       idToken: undefined,
       expiresAt: undefined,
-      raw: {},
+      lastRefresh: undefined,
     }),
     httpClient,
     createLogger(),
@@ -69,45 +83,96 @@ test("CodexResponsesClient validates model list and creates completion request",
   });
 
   assert.equal(result.completion, "foo()");
-  assert.equal(requests.length, 2);
-  const body = requests[1]!.jsonBody as {
+  assert.equal(requests.length, 1);
+  const body = requests[0]!.jsonBody as {
     model: string;
-    reasoning: { effort: string };
+    stream: boolean;
+    reasoning: { effort: string; summary: string };
   };
   assert.equal(body.model, "gpt-5.4-mini");
+  assert.equal(body.stream, true);
   assert.equal(body.reasoning.effort, "low");
+  assert.equal(body.reasoning.summary, "auto");
 });
 
-test("CodexResponsesClient accepts vendor model list shape", async () => {
+test("CodexResponsesClient probe uses the required model without /models preflight", async () => {
+  const requests: HttpRequestOptions[] = [];
   const client = new CodexResponsesClient(
     new FakeAuthStore({
-      authFilePath: "/tmp/auth.json",
       accessToken: "access",
       refreshToken: "refresh",
       accountId: undefined,
       idToken: undefined,
       expiresAt: undefined,
-      raw: {},
+      lastRefresh: undefined,
     }),
     {
       async request(options: HttpRequestOptions): Promise<HttpResponse> {
+        requests.push(options);
         return {
           status: 200,
           headers: {},
-          bodyText: JSON.stringify(
-            options.url.includes("/models")
-              ? { models: [{ slug: "gpt-5.4-mini" }] }
-              : { output_text: '{"completion":""}' },
-          ),
+          bodyText: [
+            'event: response.output_text.delta',
+            'data: {"type":"response.output_text.delta","delta":"OK"}',
+            "",
+            'event: response.completed',
+            'data: {"type":"response.completed","response":{"error":null}}',
+            "",
+          ].join("\n"),
         };
       },
     },
     createLogger(),
   );
 
-  await assert.doesNotReject(async () => {
-    await client.ensureModelAvailable();
-  });
+  await client.probeReady();
+
+  assert.equal(requests.length, 1);
+  assert.match(requests[0]!.url, /\/responses$/);
+});
+
+test("CodexResponsesClient fails closed on tool-call events", async () => {
+  const client = new CodexResponsesClient(
+    new FakeAuthStore({
+      accessToken: "access",
+      refreshToken: "refresh",
+      accountId: undefined,
+      idToken: undefined,
+      expiresAt: undefined,
+      lastRefresh: undefined,
+    }),
+    {
+      async request(): Promise<HttpResponse> {
+        return {
+          status: 200,
+          headers: {},
+          bodyText: [
+            'event: response.output_item.added',
+            'data: {"type":"response.output_item.added","item":{"type":"function_call"}}',
+            "",
+            'event: response.completed',
+            'data: {"type":"response.completed","response":{"error":null}}',
+            "",
+          ].join("\n"),
+        };
+      },
+    },
+    createLogger(),
+  );
+
+  await assert.rejects(async () => {
+    await client.complete({
+      languageId: "typescript",
+      relativePath: "src/example.ts",
+      prefix: "",
+      suffix: "",
+      linePrefix: "",
+      lineSuffix: "",
+      cursorLine: 1,
+      cursorCharacter: 1,
+    });
+  }, /tool calls are unsupported/i);
 });
 
 function createLogger() {

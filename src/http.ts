@@ -20,7 +20,11 @@ export class NodeHttpClient implements HttpClient {
   public async request(options: HttpRequestOptions): Promise<HttpResponse> {
     const url = new URL(options.url);
     const bodyText =
-      options.jsonBody === undefined ? undefined : JSON.stringify(options.jsonBody);
+      options.bodyText !== undefined
+        ? options.bodyText
+        : options.jsonBody === undefined
+          ? undefined
+          : JSON.stringify(options.jsonBody);
     const transport = url.protocol === "http:" ? http : https;
 
     return await new Promise<HttpResponse>((resolve, reject) => {
@@ -154,6 +158,9 @@ function extractErrorMessage(bodyText: string): string {
     }
     if (typeof parsed.message === "string") {
       return parsed.message;
+    }
+    if (typeof parsed.detail === "string") {
+      return parsed.detail;
     }
   } catch {
     return bodyText;

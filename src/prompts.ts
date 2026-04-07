@@ -10,8 +10,9 @@ export function buildPrompt(request: CompletionRequest): PromptPayload {
     instructions: [
       "You are an inline code completion engine.",
       "Continue the code exactly at the cursor.",
-      "Return only JSON that matches the provided schema.",
-      "The completion must start at the cursor and must not repeat already-typed prefix text.",
+      "Return only the text to insert at the cursor.",
+      "Do not use markdown, code fences, explanations, or surrounding quotes.",
+      "Do not repeat already-typed prefix text.",
       "Use the suffix as a hard constraint and stop before text that is already present after the cursor.",
       "Prefer the smallest useful completion over speculative large rewrites.",
       "If no confident completion exists, return an empty string.",

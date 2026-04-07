@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  Runs on the <code>code-server</code> host, reads your existing <code>~/.codex/auth.json</code>, and sends direct Codex <code>/responses</code> requests for inline completions.
+  Runs on the <code>code-server</code> host, signs in with Codex OAuth PKCE, stores its own session, and sends direct Codex <code>/responses</code> requests for inline completions.
 </p>
 
 ## Quick Start
@@ -22,7 +22,7 @@ Install the latest release into `code-server`:
 
 ```bash
 tmpfile="$(mktemp -t codex-tab-XXXXXX.vsix)" && \
-curl -fL "https://github.com/smturtle2/codex-tab/releases/latest/download/codex-tab-0.0.1.vsix" -o "$tmpfile" && \
+curl -fL "https://github.com/smturtle2/codex-tab/releases/latest/download/codex-tab-0.0.2.vsix" -o "$tmpfile" && \
 code-server --install-extension "$tmpfile" && \
 rm -f "$tmpfile"
 ```
@@ -30,9 +30,9 @@ rm -f "$tmpfile"
 Release links:
 
 - Latest release: [github.com/smturtle2/codex-tab/releases/latest](https://github.com/smturtle2/codex-tab/releases/latest)
-- Direct VSIX asset: [codex-tab-0.0.1.vsix](https://github.com/smturtle2/codex-tab/releases/latest/download/codex-tab-0.0.1.vsix)
+- Direct VSIX asset: [codex-tab-0.0.2.vsix](https://github.com/smturtle2/codex-tab/releases/latest/download/codex-tab-0.0.2.vsix)
 
-Then reload `code-server`, open the Command Palette, and run `Codex Autocomplete: Check Setup`.
+Then reload `code-server`, open the Command Palette, run `Codex Autocomplete: Sign In`, finish the browser flow, paste the callback URL, and run `Codex Autocomplete: Check Setup`.
 
 ## What It Does
 
@@ -40,22 +40,23 @@ Then reload `code-server`, open the Command Palette, and run `Codex Autocomplete
 - Server-side execution with `extensionKind: ["workspace"]`
 - Direct `https://chatgpt.com/backend-api/codex/responses` calls
 - Hard-locked model configuration: `gpt-5.4-mini` with `low` reasoning effort
-- Existing Codex login reuse through `~/.codex/auth.json`
+- Extension-owned OAuth PKCE sign-in stored in VS Code secret storage
 - No thread-based `codex app-server` generation flow
 
 ## Requirements
 
 - `code-server`
-- A readable file-backed Codex login at `~/.codex/auth.json`
 - Access to `gpt-5.4-mini`
 - Outbound network access from the `code-server` host to OpenAI endpoints
 
 ## How It Works
 
-`Codex Tab` runs on the same machine as your `code-server` extension host. It reads your existing Codex auth file, refreshes tokens when needed, validates model availability, and requests structured completions from the Codex responses backend. Nothing runs in the browser beyond the normal `code-server` UI.
+`Codex Tab` runs on the same machine as your `code-server` extension host. It starts a Codex OAuth PKCE sign-in flow from the command palette, stores refreshable credentials in VS Code secret storage, runs a live setup probe against `gpt-5.4-mini`, and requests streamed plain-text completions from the Codex responses backend. Nothing runs in the browser beyond the normal `code-server` UI and the login redirect.
 
 ## Commands
 
+- `Codex Autocomplete: Sign In`
+- `Codex Autocomplete: Sign Out`
 - `Codex Autocomplete: Check Setup`
 - `Codex Autocomplete: Reload Auth`
 - `Codex Autocomplete: Open Logs`
@@ -67,7 +68,6 @@ Then reload `code-server`, open the Command Palette, and run `Codex Autocomplete
 - `codexAutocomplete.debounceMs`
 - `codexAutocomplete.maxPrefixChars`
 - `codexAutocomplete.maxSuffixChars`
-- `codexAutocomplete.authFilePath`
 - `codexAutocomplete.requestTimeoutMs`
 
 ## Development
@@ -83,7 +83,7 @@ npm run package:vsix
 Install a locally packaged build with:
 
 ```bash
-code-server --install-extension ./codex-tab-0.0.1.vsix
+code-server --install-extension ./codex-tab-0.0.2.vsix
 ```
 
 ## License

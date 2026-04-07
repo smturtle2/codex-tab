@@ -5,13 +5,18 @@ import { CodexResponsesClient } from "./codexClient";
 import { NodeHttpClient } from "./http";
 import { OutputLogger } from "./log";
 import { CodexAutocompleteService } from "./service";
-import type { ExtensionSettings } from "./types";
+import type { AuthUi, ExtensionSettings, SecretStore } from "./types";
 
 export function activate(context: vscode.ExtensionContext): void {
   const logger = new OutputLogger("Codex Tab");
   const settings = readSettings();
   const httpClient = new NodeHttpClient();
-  const authStore = new CodexAuthStore(settings.authFilePath, httpClient, logger);
+  const authStore = new CodexAuthStore(
+    new VscodeSecretStore(context.secrets),
+    new VscodeAuthUi(logger),
+    httpClient,
+    logger,
+  );
   const client = new CodexResponsesClient(
     authStore,
     httpClient,
@@ -34,6 +39,12 @@ export function activate(context: vscode.ExtensionContext): void {
         },
       },
     ),
+    vscode.commands.registerCommand("codexAutocomplete.signIn", async () => {
+      await service.signIn(true);
+    }),
+    vscode.commands.registerCommand("codexAutocomplete.signOut", async () => {
+      await service.signOut(true);
+    }),
     vscode.commands.registerCommand("codexAutocomplete.checkSetup", async () => {
       await service.checkSetup(true);
     }),
@@ -66,7 +77,55 @@ function readSettings(): ExtensionSettings {
     debounceMs: config.get<number>("debounceMs", 250),
     maxPrefixChars: config.get<number>("maxPrefixChars", 4000),
     maxSuffixChars: config.get<number>("maxSuffixChars", 1200),
-    authFilePath: config.get<string>("authFilePath", "~/.codex/auth.json"),
     requestTimeoutMs: config.get<number>("requestTimeoutMs", 20_000),
   };
+}
+
+class VscodeSecretStore implements SecretStore {
+  private readonly secrets: vscode.SecretStorage;
+
+  public constructor(secrets: vscode.SecretStorage) {
+    this.secrets = secrets;
+  }
+
+  public async get(key: string): Promise<string | undefined> {
+    return await this.secrets.get(key);
+  }
+
+  public async store(key: string, value: string): Promise<void> {
+    await this.secrets.store(key, value);
+  }
+
+  public async delete(key: string): Promise<void> {
+    await this.secrets.delete(key);
+  }
+}
+
+class VscodeAuthUi implements AuthUi {
+  private readonly logger: OutputLogger;
+
+  public constructor(logger: OutputLogger) {
+    this.logger = logger;
+  }
+
+  public async authorize(authorizeUrl: string): Promise<string | undefined> {
+    const opened = await vscode.env.openExternal(vscode.Uri.parse(authorizeUrl));
+    if (!opened) {
+      this.logger.warn("VS Code could not open the OAuth URL automatically");
+      void vscode.window.showWarningMessage(
+        "Codex Tab could not open the sign-in URL automatically. Copy it from the output log, finish sign-in, then paste the callback URL.",
+      );
+    } else {
+      void vscode.window.showInformationMessage(
+        "Complete the Codex sign-in flow in the browser, then paste the callback URL.",
+      );
+    }
+
+    return await vscode.window.showInputBox({
+      title: "Codex Tab Sign In",
+      prompt: "Paste the full localhost callback URL from the OAuth flow.",
+      placeHolder: "http://localhost:1455/auth/callback?code=...",
+      ignoreFocusOut: true,
+    });
+  }
 }

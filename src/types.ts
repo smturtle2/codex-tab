@@ -1,57 +1,78 @@
 export const REQUIRED_MODEL = "gpt-5.4-mini";
 export const REQUIRED_REASONING_EFFORT = "low";
+export const REQUIRED_REASONING_SUMMARY = "auto";
 export const REFRESH_LEEWAY_MS = 60_000;
 export const DEFAULT_TIMEOUT_MS = 20_000;
+export const DISCOVERY_ENDPOINT = "https://auth.openai.com/.well-known/oauth-authorization-server";
+export const AUTHORIZATION_ENDPOINT = "https://auth.openai.com/oauth/authorize";
 export const TOKEN_ENDPOINT = "https://auth.openai.com/oauth/token";
 export const RESPONSES_BASE_URL = "https://chatgpt.com/backend-api/codex";
 export const OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
+export const OAUTH_SCOPE = "openid profile email offline_access";
+export const OAUTH_REDIRECT_URI = "http://localhost:1455/auth/callback";
+export const OAUTH_ORIGINATOR = "codex_cli_rs";
+export const AUTH_SECRET_KEY = "codexAutocomplete.oauthSession";
 
 export interface ExtensionSettings {
   enabled: boolean;
   debounceMs: number;
   maxPrefixChars: number;
   maxSuffixChars: number;
-  authFilePath: string;
   requestTimeoutMs: number;
 }
 
-export interface TokenRecord {
-  id_token?: unknown;
-  access_token?: unknown;
-  refresh_token?: unknown;
-  account_id?: unknown;
-}
-
-export interface AuthFileRecord {
-  auth_mode?: unknown;
-  OPENAI_API_KEY?: unknown;
-  tokens?: TokenRecord | null;
-  last_refresh?: unknown;
-  [key: string]: unknown;
+export interface AuthSessionRecord {
+  access_token: string;
+  refresh_token: string;
+  id_token?: string | undefined;
+  account_id?: string | undefined;
+  expires_at?: number | undefined;
+  token_type?: string | undefined;
+  scope?: string | undefined;
+  last_refresh?: number | undefined;
 }
 
 export interface AuthSnapshot {
-  authFilePath: string;
   accessToken: string;
   refreshToken: string;
   accountId: string | undefined;
   idToken: string | undefined;
   expiresAt: number | undefined;
-  raw: AuthFileRecord;
+  lastRefresh: number | undefined;
+}
+
+export interface SecretStore {
+  get(key: string): Promise<string | undefined>;
+  store(key: string, value: string): Promise<void>;
+  delete(key: string): Promise<void>;
+}
+
+export interface AuthUi {
+  authorize(authorizeUrl: string): Promise<string | undefined>;
 }
 
 export interface AuthStore {
   invalidate(): void;
+  hasSession(): Promise<boolean>;
   ensureValid(signal?: AbortSignal): Promise<AuthSnapshot>;
   forceRefresh(signal?: AbortSignal): Promise<AuthSnapshot>;
-  updateAuthFilePath?(authFilePath: string): void;
+  signIn(signal?: AbortSignal): Promise<AuthSnapshot>;
+  signOut(): Promise<void>;
+}
+
+export interface OAuthEndpointConfig {
+  authorizationEndpoint: string;
+  tokenEndpoint: string;
 }
 
 export interface RefreshTokenPayload {
-  access_token?: string;
-  refresh_token?: string;
-  id_token?: string;
-  token_type?: string;
+  access_token?: string | undefined;
+  refresh_token?: string | undefined;
+  id_token?: string | undefined;
+  token_type?: string | undefined;
+  scope?: string | undefined;
+  expires_in?: number | undefined;
+  account_id?: string | undefined;
 }
 
 export interface CompletionRequest {
@@ -81,6 +102,7 @@ export interface HttpRequestOptions {
   url: string;
   headers?: Record<string, string> | undefined;
   jsonBody?: unknown;
+  bodyText?: string | undefined;
   timeoutMs?: number | undefined;
   signal?: AbortSignal | undefined;
 }
@@ -95,7 +117,7 @@ export interface HttpClient {
   request(options: HttpRequestOptions): Promise<HttpResponse>;
 }
 
-export interface ModelAvailabilityResponse {
-  available: boolean;
-  modelIds: string[];
+export interface SseEvent {
+  event: string;
+  dataText: string;
 }

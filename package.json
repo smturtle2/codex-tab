@@ -1,8 +1,8 @@
 {
   "name": "codex-tab",
   "displayName": "Codex Tab",
-  "description": "code-server-only ghost text autocomplete backed by Codex OAuth auth.json tokens.",
-  "version": "0.0.1",
+  "description": "code-server-only ghost text autocomplete backed by Codex OAuth PKCE sign-in.",
+  "version": "0.0.2",
   "publisher": "smturtle2",
   "license": "Apache-2.0",
   "repository": {
@@ -27,6 +27,8 @@
   ],
   "activationEvents": [
     "onStartupFinished",
+    "onCommand:codexAutocomplete.signIn",
+    "onCommand:codexAutocomplete.signOut",
     "onCommand:codexAutocomplete.checkSetup",
     "onCommand:codexAutocomplete.reloadAuth",
     "onCommand:codexAutocomplete.openLogs",
@@ -35,6 +37,14 @@
   ],
   "contributes": {
     "commands": [
+      {
+        "command": "codexAutocomplete.signIn",
+        "title": "Codex Autocomplete: Sign In"
+      },
+      {
+        "command": "codexAutocomplete.signOut",
+        "title": "Codex Autocomplete: Sign Out"
+      },
       {
         "command": "codexAutocomplete.checkSetup",
         "title": "Codex Autocomplete: Check Setup"
@@ -77,11 +87,6 @@
           "default": 1200,
           "minimum": 0,
           "description": "Maximum suffix characters sent to Codex."
-        },
-        "codexAutocomplete.authFilePath": {
-          "type": "string",
-          "default": "~/.codex/auth.json",
-          "description": "Absolute or ~-prefixed path to the Codex auth.json file."
         },
         "codexAutocomplete.requestTimeoutMs": {
           "type": "number",
