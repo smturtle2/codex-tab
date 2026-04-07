@@ -320,9 +320,11 @@ function buildAuthorizeUrl(
     client_id: OAUTH_CLIENT_ID,
     redirect_uri: OAUTH_REDIRECT_URI,
     scope: OAUTH_SCOPE,
+    state,
     code_challenge: codeChallenge,
     code_challenge_method: "S256",
-    state,
+    id_token_add_organizations: "true",
+    codex_cli_simplified_flow: "true",
     originator: OAUTH_ORIGINATOR,
   });
   return `${authorizationEndpoint}?${query.toString()}`;

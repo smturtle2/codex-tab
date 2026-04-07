@@ -102,8 +102,12 @@ test("CodexAuthStore signs in through PKCE and stores the exchanged tokens", asy
     secrets,
     {
       async authorize(authorizeUrl: string): Promise<string> {
-        const state = new URL(authorizeUrl).searchParams.get("state");
+        const url = new URL(authorizeUrl);
+        const state = url.searchParams.get("state");
         assert.ok(state);
+        assert.equal(url.searchParams.get("id_token_add_organizations"), "true");
+        assert.equal(url.searchParams.get("codex_cli_simplified_flow"), "true");
+        assert.equal(url.searchParams.get("originator"), "codex_cli_rs");
         return `http://localhost:1455/auth/callback?code=code-123&state=${state}`;
       },
     },
