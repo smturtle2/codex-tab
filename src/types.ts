@@ -1,4 +1,3 @@
-export const DEFAULT_MODEL = "gpt-5.4-mini";
 export const DEFAULT_REASONING_EFFORT = "low";
 export const DEFAULT_REASONING_SUMMARY = "auto";
 export const REASONING_EFFORT_VALUES = [

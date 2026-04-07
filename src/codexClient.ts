@@ -10,7 +10,6 @@ import type {
   ModelDescriptor,
 } from "./types";
 import {
-  DEFAULT_MODEL,
   DEFAULT_REASONING_EFFORT,
   DEFAULT_REASONING_SUMMARY,
   DEFAULT_TIMEOUT_MS,
@@ -34,7 +33,6 @@ interface StreamedResponsePayload {
 }
 
 interface CodexClientConfig {
-  model: ExtensionSettings["model"];
   reasoningEffort: ExtensionSettings["reasoningEffort"];
   requestTimeoutMs: ExtensionSettings["requestTimeoutMs"];
   clientVersion?: string | undefined;
@@ -45,7 +43,6 @@ export class CodexResponsesClient {
   private readonly httpClient: HttpClient;
   private readonly logger: LoggerLike;
   private timeoutMs: number;
-  private model: string;
   private reasoningEffort: ExtensionSettings["reasoningEffort"];
   private readonly clientVersion: string;
 
@@ -59,7 +56,6 @@ export class CodexResponsesClient {
     this.httpClient = httpClient;
     this.logger = logger;
     this.timeoutMs = settings?.requestTimeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.model = normalizeModelId(settings?.model ?? DEFAULT_MODEL);
     this.reasoningEffort = settings?.reasoningEffort ?? DEFAULT_REASONING_EFFORT;
     this.clientVersion = normalizeClientVersion(settings?.clientVersion);
   }
@@ -69,10 +65,9 @@ export class CodexResponsesClient {
   }
 
   public updateConfig(
-    settings: Pick<ExtensionSettings, "model" | "reasoningEffort" | "requestTimeoutMs">,
+    settings: Pick<ExtensionSettings, "reasoningEffort" | "requestTimeoutMs">,
   ): void {
     this.timeoutMs = settings.requestTimeoutMs;
-    this.model = normalizeModelId(settings.model);
     this.reasoningEffort = settings.reasoningEffort;
     this.invalidate();
   }
@@ -110,10 +105,10 @@ export class CodexResponsesClient {
     this.invalidate();
   }
 
-  public async probeReady(signal?: AbortSignal): Promise<void> {
+  public async probeReady(modelId: string, signal?: AbortSignal): Promise<void> {
     await this.requestStreamedText(
       {
-        model: this.model,
+        model: requireModelId(modelId),
         instructions: "Reply with exactly OK.",
         input: [{ role: "user", content: "Reply with exactly OK." }],
         tools: [],
@@ -133,12 +128,13 @@ export class CodexResponsesClient {
 
   public async complete(
     request: CompletionRequest,
+    modelId: string,
     signal?: AbortSignal,
   ): Promise<CompletionResult> {
     const prompt = buildPrompt(request);
     const rawText = await this.requestStreamedText(
       {
-        model: this.model,
+        model: requireModelId(modelId),
         instructions: prompt.instructions,
         input: [{ role: "user", content: prompt.input }],
         tools: [],
@@ -208,6 +204,14 @@ export class CodexResponsesClient {
 function normalizeClientVersion(value: string | undefined): string {
   const normalized = value?.trim();
   return normalized ? normalized : "0.0.0";
+}
+
+function requireModelId(value: string): string {
+  const normalized = normalizeModelId(value);
+  if (!normalized) {
+    throw new Error("A non-empty model id is required for Codex requests.");
+  }
+  return normalized;
 }
 
 function buildAuthHeaders(snapshot: AuthSnapshot): Record<string, string> {

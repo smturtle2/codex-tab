@@ -2,7 +2,7 @@
   "name": "codex-tab",
   "displayName": "Codex Tab",
   "description": "code-server-only ghost text autocomplete backed by Codex OAuth PKCE sign-in.",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "publisher": "smturtle2",
   "license": "Apache-2.0",
   "repository": {
@@ -82,8 +82,8 @@
         },
         "codexAutocomplete.model": {
           "type": "string",
-          "default": "gpt-5.4-mini",
-          "description": "Model used for inline completions. Use the \"Codex Tab: Select Model\" command to browse the live account model list."
+          "default": "",
+          "description": "Model used for inline completions. Leave empty to use the account default model, or use the \"Codex Tab: Select Model\" command to pick a listed model or enter a custom model ID."
         },
         "codexAutocomplete.reasoningEffort": {
           "type": "string",

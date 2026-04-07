@@ -24,7 +24,6 @@ export function activate(context: vscode.ExtensionContext): void {
     httpClient,
     logger,
     {
-      model: settings.model,
       reasoningEffort: settings.reasoningEffort,
       requestTimeoutMs: settings.requestTimeoutMs,
       clientVersion,
@@ -92,7 +91,7 @@ function readSettings(): ExtensionSettings {
   const config = vscode.workspace.getConfiguration("codexAutocomplete");
   return {
     enabled: config.get<boolean>("enabled", true),
-    model: normalizeModelId(config.get<string>("model")),
+    model: normalizeModelId(config.get<string>("model", "")),
     reasoningEffort: normalizeReasoningEffort(
       config.get<string>("reasoningEffort"),
     ),

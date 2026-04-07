@@ -70,23 +70,25 @@ test("CodexResponsesClient creates streamed completion requests and parses delta
     httpClient,
     createLogger(),
     {
-      model: "gpt-5.4-mini",
       reasoningEffort: "low",
       requestTimeoutMs: 20_000,
       clientVersion: "1.2.3",
     },
   );
 
-  const result = await client.complete({
-    languageId: "typescript",
-    relativePath: "src/example.ts",
-    prefix: "const x = ",
-    suffix: "\n",
-    linePrefix: "const x = ",
-    lineSuffix: "",
-    cursorLine: 1,
-    cursorCharacter: 11,
-  });
+  const result = await client.complete(
+    {
+      languageId: "typescript",
+      relativePath: "src/example.ts",
+      prefix: "const x = ",
+      suffix: "\n",
+      linePrefix: "const x = ",
+      lineSuffix: "",
+      cursorLine: 1,
+      cursorCharacter: 11,
+    },
+    "gpt-5.4-mini",
+  );
 
   assert.equal(result.completion, "foo()");
   assert.equal(requests.length, 1);
@@ -132,14 +134,13 @@ test("CodexResponsesClient probe uses the required model without /models preflig
     },
     createLogger(),
     {
-      model: "gpt-5.4-mini",
       reasoningEffort: "low",
       requestTimeoutMs: 20_000,
       clientVersion: "1.2.3",
     },
   );
 
-  await client.probeReady();
+  await client.probeReady("gpt-5.4-mini");
 
   assert.equal(requests.length, 1);
   assert.match(requests[0]!.url, /\/responses\?client_version=1\.2\.3$/);
@@ -173,7 +174,6 @@ test("CodexResponsesClient fails closed on tool-call events", async () => {
     },
     createLogger(),
     {
-      model: "gpt-5.4-mini",
       reasoningEffort: "low",
       requestTimeoutMs: 20_000,
       clientVersion: "1.2.3",
@@ -181,16 +181,19 @@ test("CodexResponsesClient fails closed on tool-call events", async () => {
   );
 
   await assert.rejects(async () => {
-    await client.complete({
-      languageId: "typescript",
-      relativePath: "src/example.ts",
-      prefix: "",
-      suffix: "",
-      linePrefix: "",
-      lineSuffix: "",
-      cursorLine: 1,
-      cursorCharacter: 1,
-    });
+    await client.complete(
+      {
+        languageId: "typescript",
+        relativePath: "src/example.ts",
+        prefix: "",
+        suffix: "",
+        linePrefix: "",
+        lineSuffix: "",
+        cursorLine: 1,
+        cursorCharacter: 1,
+      },
+      "gpt-5.4-mini",
+    );
   }, /tool calls are unsupported/i);
 });
 
@@ -228,7 +231,6 @@ test("CodexResponsesClient lists models from the Codex backend", async () => {
     },
     createLogger(),
     {
-      model: "gpt-5.4-mini",
       reasoningEffort: "low",
       requestTimeoutMs: 20_000,
       clientVersion: "1.2.3",
@@ -277,16 +279,43 @@ test("CodexResponsesClient falls back to a default client version when none is p
     },
     createLogger(),
     {
-      model: "gpt-5.4-mini",
       reasoningEffort: "low",
       requestTimeoutMs: 20_000,
     },
   );
 
-  await client.probeReady();
+  await client.probeReady("gpt-5.4-mini");
 
   assert.equal(requests.length, 1);
   assert.match(requests[0]!.url, /\/responses\?client_version=0\.0\.0$/);
+});
+
+test("CodexResponsesClient requires a non-empty model id at call time", async () => {
+  const client = new CodexResponsesClient(
+    new FakeAuthStore({
+      accessToken: "access",
+      refreshToken: "refresh",
+      accountId: undefined,
+      idToken: undefined,
+      expiresAt: undefined,
+      lastRefresh: undefined,
+    }),
+    {
+      async request(): Promise<HttpResponse> {
+        throw new Error("request should not be called");
+      },
+    },
+    createLogger(),
+    {
+      reasoningEffort: "low",
+      requestTimeoutMs: 20_000,
+      clientVersion: "1.2.3",
+    },
+  );
+
+  await assert.rejects(async () => {
+    await client.probeReady("");
+  }, /non-empty model id/i);
 });
 
 function createLogger() {

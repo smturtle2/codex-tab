@@ -5,7 +5,6 @@ import type {
   ReasoningEffort,
 } from "./types";
 import {
-  DEFAULT_MODEL,
   DEFAULT_REASONING_EFFORT,
   REASONING_EFFORT_VALUES,
 } from "./types";
@@ -32,7 +31,33 @@ export function normalizeReasoningEffort(value: string | undefined): ReasoningEf
 
 export function normalizeModelId(value: string | undefined): string {
   const normalized = value?.trim();
-  return normalized ? normalized : DEFAULT_MODEL;
+  return normalized ?? "";
+}
+
+export function isAutomaticModelSelection(value: string | undefined): boolean {
+  return normalizeModelId(value).length === 0;
+}
+
+export function createSyntheticModelDescriptor(modelId: string): ModelDescriptor {
+  const normalized = normalizeModelId(modelId);
+  if (!normalized) {
+    throw new Error("Cannot create a model descriptor from an empty model id.");
+  }
+
+  return {
+    id: normalized,
+    label: normalized,
+    supportedReasoningEfforts: inferReasoningEffortsForModel(normalized),
+    reasoningEffortSource: "inferred",
+  };
+}
+
+export function resolveDefaultModel(models: ModelDescriptor[]): ModelDescriptor {
+  const defaultModel = models.find((model) => model.isDefault) ?? models[0];
+  if (!defaultModel) {
+    throw new Error("No live models were available to resolve the account default model.");
+  }
+  return defaultModel;
 }
 
 export function getReasoningEffortsForModel(
@@ -56,6 +81,13 @@ export function validateConfiguredModel(
     throw new Error(`Configured model "${modelId}" is not available for this account.`);
   }
 
+  return validateModelReasoning(model, reasoningEffort);
+}
+
+export function validateModelReasoning(
+  model: ModelDescriptor,
+  reasoningEffort: ReasoningEffort,
+): ModelDescriptor {
   const supportedEfforts = normalizeReasoningEffortList(model.supportedReasoningEfforts);
   if (
     model.reasoningEffortSource === "backend" &&
@@ -64,7 +96,7 @@ export function validateConfiguredModel(
   ) {
     const recommended = getDefaultReasoningEffort(model, supportedEfforts);
     throw new Error(
-      `Reasoning effort "${reasoningEffort}" is not supported by "${modelId}". Choose one of: ${supportedEfforts.join(", ")}.${recommended ? ` Recommended: ${recommended}.` : ""}`,
+      `Reasoning effort "${reasoningEffort}" is not supported by "${model.id}". Choose one of: ${supportedEfforts.join(", ")}.${recommended ? ` Recommended: ${recommended}.` : ""}`,
     );
   }
 
@@ -179,12 +211,7 @@ function normalizeModel(value: unknown): ModelDescriptor | undefined {
     if (!looksLikeModelString(value)) {
       return undefined;
     }
-    return {
-      id: value,
-      label: value,
-      supportedReasoningEfforts: inferReasoningEffortsForModel(value),
-      reasoningEffortSource: "inferred",
-    };
+    return createSyntheticModelDescriptor(value);
   }
 
   if (!value || typeof value !== "object") {

@@ -2,11 +2,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  createSyntheticModelDescriptor,
   formatReasoningEffortLabel,
   getReasoningEffortsForModel,
+  isAutomaticModelSelection,
   normalizeModelId,
   normalizeReasoningEffort,
   parseModelListResponse,
+  resolveDefaultModel,
+  validateModelReasoning,
   validateConfiguredModel,
 } from "../models";
 import type { HttpResponse, ModelDescriptor } from "../types";
@@ -16,9 +20,11 @@ test("normalizeReasoningEffort falls back to low for unknown values", () => {
   assert.equal(normalizeReasoningEffort("unknown"), "low");
 });
 
-test("normalizeModelId trims values and falls back to the default model", () => {
+test("normalizeModelId trims values and keeps empty values for auto mode", () => {
   assert.equal(normalizeModelId("  gpt-5.4-mini  "), "gpt-5.4-mini");
-  assert.equal(normalizeModelId(""), "gpt-5.4-mini");
+  assert.equal(normalizeModelId(""), "");
+  assert.equal(isAutomaticModelSelection(""), true);
+  assert.equal(isAutomaticModelSelection("gpt-5.3-codex"), false);
 });
 
 test("getReasoningEffortsForModel infers codex and GPT-5 families", () => {
@@ -40,6 +46,33 @@ test("getReasoningEffortsForModel infers codex and GPT-5 families", () => {
     "medium",
     "high",
   ]);
+});
+
+test("resolveDefaultModel prefers backend defaults and synthetic models infer capabilities", () => {
+  const resolved = resolveDefaultModel([
+    {
+      id: "gpt-5.2-codex",
+      label: "GPT-5.2 Codex",
+      isDefault: false,
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+      reasoningEffortSource: "backend",
+    },
+    {
+      id: "gpt-5.3-codex",
+      label: "GPT-5.3 Codex",
+      isDefault: true,
+      supportedReasoningEfforts: ["low", "medium", "high"],
+      reasoningEffortSource: "backend",
+    },
+  ]);
+
+  assert.equal(resolved.id, "gpt-5.3-codex");
+  assert.deepEqual(createSyntheticModelDescriptor("gpt-5.4-mini"), {
+    id: "gpt-5.4-mini",
+    label: "gpt-5.4-mini",
+    supportedReasoningEfforts: ["minimal", "low", "medium", "high"],
+    reasoningEffortSource: "inferred",
+  });
 });
 
 test("parseModelListResponse handles nested model arrays and infers reasoning when absent", () => {
@@ -176,6 +209,11 @@ test("validateConfiguredModel rejects unavailable models and invalid backend rea
 
   assert.equal(
     validateConfiguredModel(models, "gpt-5.4-mini", "low").id,
+    "gpt-5.4-mini",
+  );
+
+  assert.equal(
+    validateModelReasoning(createSyntheticModelDescriptor("gpt-5.4-mini"), "high").id,
     "gpt-5.4-mini",
   );
 });
