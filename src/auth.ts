@@ -99,8 +99,8 @@ export class CodexAuthStore implements AuthStore {
       method: "POST",
       url: endpoints.tokenEndpoint,
       headers: {
-        Accept: "application/json",
-        "Content-Type": "application/x-www-form-urlencoded",
+        accept: "application/json",
+        "content-type": "application/x-www-form-urlencoded",
       },
       bodyText: new URLSearchParams({
         grant_type: "authorization_code",

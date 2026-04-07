@@ -28,7 +28,7 @@ export class NodeHttpClient implements HttpClient {
     const transport = url.protocol === "http:" ? http : https;
 
     return await new Promise<HttpResponse>((resolve, reject) => {
-      const headers: Record<string, string> = { ...(options.headers ?? {}) };
+      const headers = normalizeRequestHeaders(options.headers);
       if (bodyText !== undefined) {
         headers["content-type"] ??= "application/json";
         headers["content-length"] = String(Buffer.byteLength(bodyText));
@@ -96,6 +96,16 @@ export class NodeHttpClient implements HttpClient {
       request.end();
     });
   }
+}
+
+function normalizeRequestHeaders(
+  headers: Record<string, string> | undefined,
+): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers ?? {})) {
+    normalized[key.toLowerCase()] = value;
+  }
+  return normalized;
 }
 
 function normalizeHeaders(

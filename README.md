@@ -22,7 +22,7 @@ Install the latest release into `code-server`:
 
 ```bash
 tmpfile="$(mktemp -t codex-tab-XXXXXX.vsix)" && \
-curl -fL "https://github.com/smturtle2/codex-tab/releases/latest/download/codex-tab-0.0.3.vsix" -o "$tmpfile" && \
+curl -fL "https://github.com/smturtle2/codex-tab/releases/latest/download/codex-tab-0.0.4.vsix" -o "$tmpfile" && \
 code-server --install-extension "$tmpfile" && \
 rm -f "$tmpfile"
 ```
@@ -30,7 +30,7 @@ rm -f "$tmpfile"
 Release links:
 
 - Latest release: [github.com/smturtle2/codex-tab/releases/latest](https://github.com/smturtle2/codex-tab/releases/latest)
-- Direct VSIX asset: [codex-tab-0.0.3.vsix](https://github.com/smturtle2/codex-tab/releases/latest/download/codex-tab-0.0.3.vsix)
+- Direct VSIX asset: [codex-tab-0.0.4.vsix](https://github.com/smturtle2/codex-tab/releases/latest/download/codex-tab-0.0.4.vsix)
 
 Then reload `code-server`, open the Command Palette, run `Codex Autocomplete: Sign In`, finish the browser flow, paste the callback URL, and run `Codex Autocomplete: Check Setup`.
 
@@ -83,7 +83,7 @@ npm run package:vsix
 Install a locally packaged build with:
 
 ```bash
-code-server --install-extension ./codex-tab-0.0.3.vsix
+code-server --install-extension ./codex-tab-0.0.4.vsix
 ```
 
 ## License
