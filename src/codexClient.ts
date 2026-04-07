@@ -33,6 +33,13 @@ interface StreamedResponsePayload {
   };
 }
 
+interface CodexClientConfig {
+  model: ExtensionSettings["model"];
+  reasoningEffort: ExtensionSettings["reasoningEffort"];
+  requestTimeoutMs: ExtensionSettings["requestTimeoutMs"];
+  clientVersion?: string | undefined;
+}
+
 export class CodexResponsesClient {
   private readonly authStore: AuthStore;
   private readonly httpClient: HttpClient;
@@ -40,15 +47,13 @@ export class CodexResponsesClient {
   private timeoutMs: number;
   private model: string;
   private reasoningEffort: ExtensionSettings["reasoningEffort"];
+  private readonly clientVersion: string;
 
   public constructor(
     authStore: AuthStore,
     httpClient: HttpClient,
     logger: LoggerLike,
-    settings?: Pick<
-      ExtensionSettings,
-      "model" | "reasoningEffort" | "requestTimeoutMs"
-    >,
+    settings?: CodexClientConfig,
   ) {
     this.authStore = authStore;
     this.httpClient = httpClient;
@@ -56,6 +61,7 @@ export class CodexResponsesClient {
     this.timeoutMs = settings?.requestTimeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.model = normalizeModelId(settings?.model ?? DEFAULT_MODEL);
     this.reasoningEffort = settings?.reasoningEffort ?? DEFAULT_REASONING_EFFORT;
+    this.clientVersion = normalizeClientVersion(settings?.clientVersion);
   }
 
   public invalidate(): void {
@@ -76,7 +82,7 @@ export class CodexResponsesClient {
       async (snapshot) =>
         await this.httpClient.request({
           method: "GET",
-          url: `${RESPONSES_BASE_URL}/models`,
+          url: this.buildCodexUrl("/models"),
           headers: {
             ...buildAuthHeaders(snapshot),
             Accept: "application/json",
@@ -164,7 +170,7 @@ export class CodexResponsesClient {
       async (snapshot) =>
         await this.httpClient.request({
           method: "POST",
-          url: `${RESPONSES_BASE_URL}/responses`,
+          url: this.buildCodexUrl("/responses"),
           headers: buildAuthHeaders(snapshot),
           jsonBody,
           timeoutMs: this.timeoutMs,
@@ -191,6 +197,17 @@ export class CodexResponsesClient {
     const refreshed = await this.authStore.forceRefresh(signal);
     return await fn(refreshed);
   }
+
+  private buildCodexUrl(pathname: string): string {
+    const url = new URL(`${RESPONSES_BASE_URL}${pathname}`);
+    url.searchParams.set("client_version", this.clientVersion);
+    return url.toString();
+  }
+}
+
+function normalizeClientVersion(value: string | undefined): string {
+  const normalized = value?.trim();
+  return normalized ? normalized : "0.0.0";
 }
 
 function buildAuthHeaders(snapshot: AuthSnapshot): Record<string, string> {

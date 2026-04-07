@@ -28,7 +28,7 @@ import {
 const REFRESH_SCOPE = "openid profile email";
 
 export class AuthRequiredError extends Error {
-  public constructor(message = 'Sign in required. Run "Codex Autocomplete: Sign In".') {
+  public constructor(message = 'Sign in required. Run "Codex Tab: Sign In".') {
     super(message);
     this.name = "AuthRequiredError";
   }

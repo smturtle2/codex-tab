@@ -141,7 +141,7 @@ export class CodexAutocompleteService {
       const supportedEfforts = getReasoningEffortsForModel(selected.model);
       if (!supportedEfforts.includes(this.settings.reasoningEffort)) {
         void vscode.window.showWarningMessage(
-          `Model ${selected.model.id} may not support reasoning effort "${this.settings.reasoningEffort}". Run "Codex Autocomplete: Select Reasoning Effort" to adjust it.`,
+          `Model ${selected.model.id} may not support reasoning effort "${this.settings.reasoningEffort}". Run "Codex Tab: Select Reasoning Effort" to adjust it.`,
         );
       }
     } catch (error) {

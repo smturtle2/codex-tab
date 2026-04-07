@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  Runs on the <code>code-server</code> host, signs in with Codex OAuth PKCE, stores its own session, and sends direct Codex <code>/responses</code> requests for inline completions.
+  Runs on the <code>code-server</code> host, signs in with Codex OAuth PKCE, stores its own session, and talks directly to the Codex backend for model discovery and inline completions.
 </p>
 
 ## Quick Start
@@ -22,7 +22,7 @@ Install the latest release into `code-server`:
 
 ```bash
 tmpfile="$(mktemp -t codex-tab-XXXXXX.vsix)" && \
-curl -fL "https://github.com/smturtle2/codex-tab/releases/latest/download/codex-tab-0.0.5.vsix" -o "$tmpfile" && \
+curl -fL "https://github.com/smturtle2/codex-tab/releases/latest/download/codex-tab-0.0.6.vsix" -o "$tmpfile" && \
 code-server --install-extension "$tmpfile" && \
 rm -f "$tmpfile"
 ```
@@ -30,17 +30,18 @@ rm -f "$tmpfile"
 Release links:
 
 - Latest release: [github.com/smturtle2/codex-tab/releases/latest](https://github.com/smturtle2/codex-tab/releases/latest)
-- Direct VSIX asset: [codex-tab-0.0.5.vsix](https://github.com/smturtle2/codex-tab/releases/latest/download/codex-tab-0.0.5.vsix)
+- Direct VSIX asset: [codex-tab-0.0.6.vsix](https://github.com/smturtle2/codex-tab/releases/latest/download/codex-tab-0.0.6.vsix)
 
-Then reload `code-server`, open the Command Palette, run `Codex Autocomplete: Sign In`, finish the browser flow, paste the callback URL, and run `Codex Autocomplete: Check Setup`.
+Then reload `code-server`, open the Command Palette, run `Codex Tab: Sign In`, finish the browser flow, paste the callback URL, and run `Codex Tab: Check Setup`.
 
 ## What It Does
 
 - Inline ghost text completions inside `code-server`
 - Server-side execution with `extensionKind: ["workspace"]`
-- Direct `https://chatgpt.com/backend-api/codex/responses` calls
+- Direct `https://chatgpt.com/backend-api/codex/models` and `/responses` calls
 - Live model list loaded from the Codex backend
 - Configurable reasoning effort with model-aware selection
+- Backend requests include the packaged extension `client_version`
 - Extension-owned OAuth PKCE sign-in stored in VS Code secret storage
 - No thread-based `codex app-server` generation flow
 
@@ -52,18 +53,18 @@ Then reload `code-server`, open the Command Palette, run `Codex Autocomplete: Si
 
 ## How It Works
 
-`Codex Tab` runs on the same machine as your `code-server` extension host. It starts a Codex OAuth PKCE sign-in flow from the command palette, stores refreshable credentials in VS Code secret storage, loads the live model list from the Codex backend, runs a setup probe against the configured model, and requests streamed plain-text completions from the Codex responses backend. Nothing runs in the browser beyond the normal `code-server` UI and the login redirect.
+`Codex Tab` runs on the same machine as your `code-server` extension host. It starts a Codex OAuth PKCE sign-in flow from the command palette, stores refreshable credentials in VS Code secret storage, loads the live model list from the Codex backend, tags Codex backend requests with the packaged extension version, runs a setup probe against the configured model, and requests streamed plain-text completions from the Codex responses backend. Nothing runs in the browser beyond the normal `code-server` UI and the login redirect.
 
 ## Commands
 
-- `Codex Autocomplete: Sign In`
-- `Codex Autocomplete: Sign Out`
-- `Codex Autocomplete: Check Setup`
-- `Codex Autocomplete: Reload Auth`
-- `Codex Autocomplete: Open Logs`
-- `Codex Autocomplete: Select Model`
-- `Codex Autocomplete: Select Reasoning Effort`
-- `Codex Autocomplete: Accept Next Word`
+- `Codex Tab: Sign In`
+- `Codex Tab: Sign Out`
+- `Codex Tab: Check Setup`
+- `Codex Tab: Reload Auth`
+- `Codex Tab: Open Logs`
+- `Codex Tab: Select Model`
+- `Codex Tab: Select Reasoning Effort`
+- `Codex Tab: Accept Next Word`
 
 ## Settings
 
@@ -88,7 +89,7 @@ npm run package:vsix
 Install a locally packaged build with:
 
 ```bash
-code-server --install-extension ./codex-tab-0.0.5.vsix
+code-server --install-extension ./codex-tab-0.0.6.vsix
 ```
 
 ## License

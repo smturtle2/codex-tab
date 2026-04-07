@@ -2,7 +2,7 @@
   "name": "codex-tab",
   "displayName": "Codex Tab",
   "description": "code-server-only ghost text autocomplete backed by Codex OAuth PKCE sign-in.",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "publisher": "smturtle2",
   "license": "Apache-2.0",
   "repository": {
@@ -41,39 +41,39 @@
     "commands": [
       {
         "command": "codexAutocomplete.signIn",
-        "title": "Codex Autocomplete: Sign In"
+        "title": "Codex Tab: Sign In"
       },
       {
         "command": "codexAutocomplete.signOut",
-        "title": "Codex Autocomplete: Sign Out"
+        "title": "Codex Tab: Sign Out"
       },
       {
         "command": "codexAutocomplete.checkSetup",
-        "title": "Codex Autocomplete: Check Setup"
+        "title": "Codex Tab: Check Setup"
       },
       {
         "command": "codexAutocomplete.reloadAuth",
-        "title": "Codex Autocomplete: Reload Auth"
+        "title": "Codex Tab: Reload Auth"
       },
       {
         "command": "codexAutocomplete.openLogs",
-        "title": "Codex Autocomplete: Open Logs"
+        "title": "Codex Tab: Open Logs"
       },
       {
         "command": "codexAutocomplete.selectModel",
-        "title": "Codex Autocomplete: Select Model"
+        "title": "Codex Tab: Select Model"
       },
       {
         "command": "codexAutocomplete.selectReasoningEffort",
-        "title": "Codex Autocomplete: Select Reasoning Effort"
+        "title": "Codex Tab: Select Reasoning Effort"
       },
       {
         "command": "codexAutocomplete.acceptNextWord",
-        "title": "Codex Autocomplete: Accept Next Word"
+        "title": "Codex Tab: Accept Next Word"
       }
     ],
     "configuration": {
-      "title": "Codex Autocomplete",
+      "title": "Codex Tab",
       "properties": {
         "codexAutocomplete.enabled": {
           "type": "boolean",
@@ -83,7 +83,7 @@
         "codexAutocomplete.model": {
           "type": "string",
           "default": "gpt-5.4-mini",
-          "description": "Model used for inline completions. Use the \"Codex Autocomplete: Select Model\" command to browse the live account model list."
+          "description": "Model used for inline completions. Use the \"Codex Tab: Select Model\" command to browse the live account model list."
         },
         "codexAutocomplete.reasoningEffort": {
           "type": "string",
@@ -104,7 +104,7 @@
             "Use high reasoning effort.",
             "Use the highest supported reasoning effort."
           ],
-          "description": "Reasoning effort sent with completion requests. Use the \"Codex Autocomplete: Select Reasoning Effort\" command for a model-aware menu."
+          "description": "Reasoning effort sent with completion requests. Use the \"Codex Tab: Select Reasoning Effort\" command for a model-aware menu."
         },
         "codexAutocomplete.debounceMs": {
           "type": "number",

@@ -11,6 +11,7 @@ import type { AuthUi, ExtensionSettings, SecretStore } from "./types";
 export function activate(context: vscode.ExtensionContext): void {
   const logger = new OutputLogger("Codex Tab");
   const settings = readSettings();
+  const clientVersion = readExtensionVersion(context);
   const httpClient = new NodeHttpClient();
   const authStore = new CodexAuthStore(
     new VscodeSecretStore(context.secrets),
@@ -26,6 +27,7 @@ export function activate(context: vscode.ExtensionContext): void {
       model: settings.model,
       reasoningEffort: settings.reasoningEffort,
       requestTimeoutMs: settings.requestTimeoutMs,
+      clientVersion,
     },
   );
   const service = new CodexAutocompleteService(client, logger, settings);
@@ -80,6 +82,11 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {}
+
+function readExtensionVersion(context: vscode.ExtensionContext): string {
+  const version = context.extension.packageJSON?.version;
+  return typeof version === "string" && version.trim() ? version : "0.0.0";
+}
 
 function readSettings(): ExtensionSettings {
   const config = vscode.workspace.getConfiguration("codexAutocomplete");
