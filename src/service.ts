@@ -5,6 +5,7 @@ import { AuthRequiredError } from "./auth";
 import { CodexResponsesClient } from "./codexClient";
 import {
   createSyntheticModelDescriptor,
+  filterModelCatalog,
   findModelDescriptor,
   formatReasoningEffortLabel,
   getReasoningEffortsForModel,
@@ -12,7 +13,13 @@ import {
   resolveDefaultModel,
   validateModelReasoning,
 } from "./models";
-import type { CompletionRequest, ExtensionSettings, ModelDescriptor } from "./types";
+import type {
+  CompletionRequest,
+  ExtensionSettings,
+  ModelCatalog,
+  ModelCatalogSource,
+  ModelDescriptor,
+} from "./types";
 import { buildRelativePathLabel, delay, isAbortError, trimSuggestion } from "./util";
 import type { OutputLogger } from "./log";
 
@@ -36,8 +43,8 @@ export class CodexAutocompleteService {
   private requestSeq = 0;
   private inflight: AbortController | undefined;
   private setupPromise: Promise<void> | undefined;
-  private modelCache: ModelDescriptor[] | undefined;
-  private modelCachePromise: Promise<ModelDescriptor[]> | undefined;
+  private modelCatalogCache: ModelCatalog | undefined;
+  private modelCatalogPromise: Promise<ModelCatalog> | undefined;
   private disabledReason: string | undefined;
   private resolvedModelId: string | undefined;
 
@@ -70,8 +77,8 @@ export class CodexAutocompleteService {
       requestTimeoutMs: settings.requestTimeoutMs,
     });
     this.setupPromise = undefined;
-    this.modelCache = undefined;
-    this.modelCachePromise = undefined;
+    this.modelCatalogCache = undefined;
+    this.modelCatalogPromise = undefined;
     this.disabledReason = undefined;
     this.resolvedModelId = undefined;
     this.renderStatus("idle");
@@ -134,25 +141,34 @@ export class CodexAutocompleteService {
 
   public async selectModel(): Promise<void> {
     try {
-      let models: ModelDescriptor[] = [];
+      let catalog: ModelCatalog | undefined;
+      let visibleModels: ModelDescriptor[] = [];
       let loadError: string | undefined;
       try {
-        models = await this.loadModels(true);
+        catalog = await this.loadModelCatalog(true);
+        visibleModels = catalog.visibleModels;
       } catch (error) {
         if (error instanceof AuthRequiredError) {
           throw error;
         }
         loadError = error instanceof Error ? error.message : String(error);
-        this.logger.warn(`Could not refresh model list before opening picker: ${loadError}`);
+        this.logger.warn(`Could not refresh model catalog before opening picker: ${loadError}`);
       }
 
       const currentModelId = this.getConfiguredModelId();
       const selected = await vscode.window.showQuickPick(
-        buildModelPickerItems(models, currentModelId, this.resolvedModelId),
+        buildModelPickerItems(
+          visibleModels,
+          currentModelId,
+          this.resolvedModelId,
+          catalog?.source,
+        ),
         {
           title: "Codex Tab Model",
           placeHolder: loadError
-            ? "Live model list is unavailable. Use account default or enter a custom model ID."
+            ? "The model catalog is unavailable. Use account default or enter a custom model ID."
+            : catalog?.source === "backend_fallback"
+              ? "Using fallback model catalog. You can still pick a listed model or enter a custom model ID."
             : "Select the model used for inline completions.",
           matchOnDescription: true,
           matchOnDetail: true,
@@ -188,7 +204,7 @@ export class CodexAutocompleteService {
         }
 
         await this.updateSetting("model", normalized);
-        const listedModel = findModelDescriptor(models, normalized);
+        const listedModel = findModelDescriptor(catalog?.models ?? [], normalized);
         if (listedModel) {
           this.warnIfReasoningMayMismatch(listedModel);
         } else {
@@ -441,38 +457,106 @@ export class CodexAutocompleteService {
   }
 
   private async loadModels(forceRefresh: boolean): Promise<ModelDescriptor[]> {
-    if (!forceRefresh && this.modelCache) {
-      return this.modelCache;
+    if (!forceRefresh && this.modelCatalogCache) {
+      return this.modelCatalogCache.models;
     }
-    if (!forceRefresh && this.modelCachePromise) {
-      return await this.modelCachePromise;
+    const catalog = await this.loadModelCatalog(forceRefresh);
+    return catalog.models;
+  }
+
+  private async loadModelCatalog(forceRefresh: boolean): Promise<ModelCatalog> {
+    if (!forceRefresh && this.modelCatalogCache) {
+      return this.modelCatalogCache;
+    }
+    if (!forceRefresh && this.modelCatalogPromise) {
+      return await this.modelCatalogPromise;
     }
 
-    const promise = this.client.listModels().then((models) => {
-      this.modelCache = models;
-      return models;
-    });
-    this.modelCachePromise = promise;
+    const promise = this.fetchModelCatalog();
+    this.modelCatalogPromise = promise;
 
     try {
-      return await promise;
+      const catalog = await promise;
+      this.modelCatalogCache = catalog;
+      return catalog;
     } finally {
-      if (this.modelCachePromise === promise) {
-        this.modelCachePromise = undefined;
+      if (this.modelCatalogPromise === promise) {
+        this.modelCatalogPromise = undefined;
       }
     }
   }
 
-  private async tryLoadModels(forceRefresh: boolean): Promise<ModelDescriptor[] | undefined> {
+  private async fetchModelCatalog(): Promise<ModelCatalog> {
+    const warnings: string[] = [];
+
+    let source: ModelCatalogSource;
+    let models: ModelDescriptor[];
     try {
-      return await this.loadModels(forceRefresh);
+      models = await this.client.listOfficialModels();
+      source = "official";
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      warnings.push(`official catalog unavailable: ${message}`);
+      this.logger.warn(`Official model catalog is unavailable: ${message}`);
+      models = await this.client.listFallbackModels();
+      source = "backend_fallback";
+    }
+
+    let availabilityConfig = undefined;
+    if (source === "official") {
+      try {
+        availabilityConfig = await this.client.loadModelAvailabilityConfig();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        warnings.push(`availability config load failed: ${message}`);
+        this.logger.warn(`Could not load model availability config: ${message}`);
+      }
+    }
+
+    const visibleModels = this.resolveVisibleModels(models, availabilityConfig, warnings);
+
+    return {
+      source,
+      models,
+      visibleModels,
+      ...(availabilityConfig ? { availabilityConfig } : {}),
+      warnings,
+    };
+  }
+
+  private resolveVisibleModels(
+    models: ModelDescriptor[],
+    availabilityConfig: ModelCatalog["availabilityConfig"],
+    warnings: string[],
+  ): ModelDescriptor[] {
+    const visibleModels = filterModelCatalog(models, availabilityConfig);
+    if (visibleModels.length > 0) {
+      return visibleModels;
+    }
+    if (models.length === 0) {
+      return [];
+    }
+
+    if (availabilityConfig) {
+      warnings.push("availability filtering removed every model; using the raw catalog");
+    } else {
+      warnings.push("hidden-model filtering removed every model; using the raw catalog");
+    }
+    return [...models];
+  }
+
+  private async tryLoadModelCatalog(
+    forceRefresh: boolean,
+  ): Promise<ModelCatalog | undefined> {
+    try {
+      return await this.loadModelCatalog(forceRefresh);
     } catch (error) {
       if (error instanceof AuthRequiredError) {
         throw error;
       }
 
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.warn(`Model list is unavailable: ${message}`);
+      this.logger.warn(`Model catalog is unavailable: ${message}`);
       return undefined;
     }
   }
@@ -485,32 +569,35 @@ export class CodexAutocompleteService {
       };
     }
 
-    let models: ModelDescriptor[];
+    let catalog: ModelCatalog;
     try {
-      models = await this.loadModels(false);
+      catalog = await this.loadModelCatalog(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(
-        `Could not resolve the account default model from the live model list: ${message}. Use "Codex Tab: Select Model" to choose a listed model or enter a custom model ID.`,
+        `Could not resolve the account default model from the live model catalog: ${message}. Use "Codex Tab: Select Model" to choose a listed model or enter a custom model ID.`,
       );
     }
 
     return {
-      effectiveModel: resolveDefaultModel(models),
+      effectiveModel: resolveDefaultModel(
+        catalog.visibleModels,
+        catalog.availabilityConfig,
+      ),
     };
   }
 
   private async getReasoningModelDescriptor(): Promise<ModelDescriptor> {
     const configuredModelId = this.getConfiguredModelId();
     if (configuredModelId) {
-      const models = await this.tryLoadModels(false);
-      return findModelDescriptor(models ?? [], configuredModelId)
+      const catalog = await this.tryLoadModelCatalog(false);
+      return findModelDescriptor(catalog?.models ?? [], configuredModelId)
         ?? createSyntheticModelDescriptor(configuredModelId);
     }
 
-    const models = await this.tryLoadModels(false);
-    if (models?.length) {
-      return resolveDefaultModel(models);
+    const catalog = await this.tryLoadModelCatalog(false);
+    if (catalog?.visibleModels.length) {
+      return resolveDefaultModel(catalog.visibleModels, catalog.availabilityConfig);
     }
     if (this.resolvedModelId) {
       return createSyntheticModelDescriptor(this.resolvedModelId);
@@ -617,11 +704,17 @@ export class CodexAutocompleteService {
   }
 
   private buildStatusTooltip(summary: string): string {
-    return [
+    const lines = [
       summary,
       `Model: ${describeConfiguredModelSetting(this.getConfiguredModelId(), this.resolvedModelId)}`,
       `Reasoning: ${this.settings.reasoningEffort}`,
-    ].join("\n");
+      `Catalog: ${describeCatalogSource(this.modelCatalogCache?.source)}`,
+    ];
+    const warning = this.modelCatalogCache?.warnings.at(-1);
+    if (warning) {
+      lines.push(`Catalog note: ${warning}`);
+    }
+    return lines.join("\n");
   }
 }
 
@@ -629,20 +722,22 @@ function buildModelPickerItems(
   models: ModelDescriptor[],
   currentModelId: string,
   resolvedModelId: string | undefined,
+  catalogSource: ModelCatalogSource | undefined,
 ): ModelPickerItem[] {
+  const catalogLabel = describeCatalogSource(catalogSource);
   const items: ModelPickerItem[] = [
     {
       label: "Use Account Default",
       description: currentModelId ? "Auto" : "Current",
       detail: resolvedModelId
-        ? `Clear the model setting and use the live account default. Last resolved: ${resolvedModelId}.`
-        : "Clear the model setting and use the live account default from the model list.",
+        ? `Clear the model setting and use the account default from the ${catalogLabel}. Last resolved: ${resolvedModelId}.`
+        : `Clear the model setting and use the account default from the ${catalogLabel}.`,
       action: "auto",
     },
     {
       label: "Enter Custom Model ID...",
       description: currentModelId && !findModelDescriptor(models, currentModelId) ? "Current" : "Custom",
-      detail: "Use a model directly with /responses even if it is absent from the live model list.",
+      detail: `Use a model directly with /responses even if it is absent from the ${catalogLabel}.`,
       action: "custom",
     },
   ];
@@ -652,7 +747,7 @@ function buildModelPickerItems(
     items.push({
       label: synthetic.label,
       description: "Current custom model",
-      detail: `${describeReasoningSupport(synthetic)}; not present in the live model list`,
+      detail: `${describeReasoningSupport(synthetic)}; not present in the ${catalogLabel}`,
       action: "model",
       model: synthetic,
     });
@@ -662,7 +757,7 @@ function buildModelPickerItems(
     models.map((model) => ({
       label: model.label,
       description: model.id === currentModelId ? `Current - ${model.id}` : model.id,
-      detail: describeReasoningSupport(model),
+      detail: `${describeReasoningSupport(model)}; source: ${describeCatalogSource(model.source)}`,
       action: "model" as const,
       model,
     })),
@@ -687,4 +782,19 @@ function describeReasoningSupport(model: ModelDescriptor): string {
     ? `; default: ${model.defaultReasoningEffort}`
     : "";
   return `Reasoning: ${efforts.join(", ")} (${source}${defaultEffort})`;
+}
+
+function describeCatalogSource(
+  source: ModelCatalogSource | ModelDescriptor["source"] | undefined,
+): string {
+  switch (source) {
+    case "official":
+      return "official catalog";
+    case "backend_fallback":
+      return "fallback catalog";
+    case "synthetic":
+      return "custom model";
+    default:
+      return "catalog unavailable";
+  }
 }

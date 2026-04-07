@@ -1,6 +1,8 @@
 import { parseJsonResponse } from "./http";
 import type {
   HttpResponse,
+  ModelAvailabilityConfig,
+  ModelCatalogSource,
   ModelDescriptor,
   ReasoningEffort,
 } from "./types";
@@ -49,11 +51,21 @@ export function createSyntheticModelDescriptor(modelId: string): ModelDescriptor
     label: normalized,
     supportedReasoningEfforts: inferReasoningEffortsForModel(normalized),
     reasoningEffortSource: "inferred",
+    source: "synthetic",
   };
 }
 
-export function resolveDefaultModel(models: ModelDescriptor[]): ModelDescriptor {
-  const defaultModel = models.find((model) => model.isDefault) ?? models[0];
+export function resolveDefaultModel(
+  models: ModelDescriptor[],
+  availabilityConfig?: ModelAvailabilityConfig,
+): ModelDescriptor {
+  const configuredDefaultModel = normalizeModelId(availabilityConfig?.defaultModel);
+  const defaultModel =
+    models.find((model) => model.isDefault)
+    ?? (configuredDefaultModel
+      ? findModelDescriptor(models, configuredDefaultModel)
+      : undefined)
+    ?? models[0];
   if (!defaultModel) {
     throw new Error("No live models were available to resolve the account default model.");
   }
@@ -112,7 +124,70 @@ export function findModelDescriptor(
 
 export function parseModelListResponse(response: HttpResponse): ModelDescriptor[] {
   const payload = parseJsonResponse<unknown>(response);
-  return parseModelListPayload(payload, response.headers["content-type"]);
+  return parseModelListPayload(payload, response.headers["content-type"], "backend_fallback");
+}
+
+export function parseModelCatalogResponse(
+  response: HttpResponse,
+  source: ModelCatalogSource,
+): ModelDescriptor[] {
+  const payload = parseJsonResponse<unknown>(response);
+  return parseModelListPayload(payload, response.headers["content-type"], source);
+}
+
+export function parseModelAvailabilityConfigResponse(
+  response: HttpResponse,
+): ModelAvailabilityConfig | undefined {
+  const payload = parseJsonResponse<unknown>(response);
+  return parseModelAvailabilityConfig(payload);
+}
+
+export function parseModelAvailabilityConfig(
+  payload: unknown,
+): ModelAvailabilityConfig | undefined {
+  const candidate = findAvailabilityConfigCandidate(payload);
+  if (!candidate) {
+    return undefined;
+  }
+
+  const availableModels = normalizeAvailableModels(
+    firstArray(candidate, ["available_models", "availableModels"]),
+  );
+  const useHiddenModels =
+    firstBoolean(candidate, ["use_hidden_models", "useHiddenModels"]) ?? false;
+  const defaultModel = normalizeModelId(
+    firstString(candidate, ["default_model", "defaultModel"]),
+  );
+
+  return {
+    availableModels,
+    useHiddenModels,
+    ...(defaultModel ? { defaultModel } : {}),
+  };
+}
+
+export function filterModelCatalog(
+  models: ModelDescriptor[],
+  availabilityConfig?: ModelAvailabilityConfig,
+): ModelDescriptor[] {
+  if (!availabilityConfig) {
+    return models.filter((model) => model.hidden !== true);
+  }
+
+  if (!availabilityConfig.useHiddenModels) {
+    return models.filter((model) => model.hidden !== true);
+  }
+
+  const allowedModelIds = new Set(
+    availabilityConfig.availableModels
+      .map((modelId) => normalizeModelId(modelId))
+      .filter((modelId) => modelId.length > 0),
+  );
+  if (allowedModelIds.size === 0) {
+    return [...models];
+  }
+
+  return models.filter((model) => allowedModelIds.has(model.id));
 }
 
 export function formatReasoningEffortLabel(effort: ReasoningEffort): string {
@@ -135,19 +210,20 @@ export function formatReasoningEffortLabel(effort: ReasoningEffort): string {
 function parseModelListPayload(
   payload: unknown,
   contentType: string | undefined,
+  source: ModelCatalogSource,
 ): ModelDescriptor[] {
   const candidates = collectModelCandidates(payload);
   const models = new Map<string, ModelDescriptor>();
 
   for (const candidate of candidates) {
-    const model = normalizeModel(candidate.value);
+    const model = normalizeModel(candidate.value, source);
     if (model) {
       models.set(model.id, model);
     }
   }
 
   if (models.size === 0) {
-    throw new Error(buildModelListError(payload, contentType, candidates));
+    throw new Error(buildModelListError(payload, contentType, candidates, source));
   }
 
   return [...models.values()].sort((left, right) => left.label.localeCompare(right.label));
@@ -206,12 +282,18 @@ function collectModelCandidates(payload: unknown): ModelCandidate[] {
   return candidates;
 }
 
-function normalizeModel(value: unknown): ModelDescriptor | undefined {
+function normalizeModel(
+  value: unknown,
+  source: ModelCatalogSource,
+): ModelDescriptor | undefined {
   if (typeof value === "string") {
     if (!looksLikeModelString(value)) {
       return undefined;
     }
-    return createSyntheticModelDescriptor(value);
+    return {
+      ...createSyntheticModelDescriptor(value),
+      source,
+    };
   }
 
   if (!value || typeof value !== "object") {
@@ -229,6 +311,7 @@ function normalizeModel(value: unknown): ModelDescriptor | undefined {
     firstString(record, ["label", "display_name", "displayName", "title", "name"]) ?? id;
   const supportedReasoningEfforts = extractReasoningEffortList(record);
   const defaultReasoningEffort = extractDefaultReasoningEffort(record);
+  const hidden = firstBoolean(record, ["hidden", "isHidden", "is_hidden"]);
   const isDefault = firstBoolean(record, ["isDefault", "is_default", "default"]);
   const reasoningEffortSource = supportedReasoningEfforts ? "backend" : "inferred";
 
@@ -236,10 +319,12 @@ function normalizeModel(value: unknown): ModelDescriptor | undefined {
     id,
     label,
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+    ...(hidden !== undefined ? { hidden } : {}),
     ...(isDefault !== undefined ? { isDefault } : {}),
     supportedReasoningEfforts:
       supportedReasoningEfforts ?? inferReasoningEffortsForModel(id),
     reasoningEffortSource,
+    source,
   };
 }
 
@@ -399,7 +484,7 @@ function extractModelIdentifier(
 function hasModelSignals(record: Record<string, unknown>): boolean {
   if (
     firstString(record, ["displayName", "display_name", "label", "description", "title"]) ||
-    firstBoolean(record, ["isDefault", "is_default", "hidden"]) !== undefined ||
+    firstBoolean(record, ["isDefault", "is_default", "hidden", "isHidden", "is_hidden"]) !== undefined ||
     firstArray(record, ["supportedReasoningEfforts", "supported_reasoning_efforts", "inputModalities"])
   ) {
     return true;
@@ -502,10 +587,80 @@ function appendPath(basePath: string, key: string): string {
     : `${basePath}[${JSON.stringify(key)}]`;
 }
 
+function findAvailabilityConfigCandidate(
+  payload: unknown,
+): Record<string, unknown> | undefined {
+  const queue: unknown[] = [payload];
+  const visited = new WeakSet<object>();
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || typeof current !== "object") {
+      continue;
+    }
+    if (visited.has(current)) {
+      continue;
+    }
+    visited.add(current);
+
+    if (Array.isArray(current)) {
+      for (const item of current) {
+        queue.push(item);
+      }
+      continue;
+    }
+
+    const record = current as Record<string, unknown>;
+    if (looksLikeAvailabilityConfig(record)) {
+      return record;
+    }
+
+    for (const value of Object.values(record)) {
+      if (value && (typeof value === "object" || Array.isArray(value))) {
+        queue.push(value);
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function looksLikeAvailabilityConfig(record: Record<string, unknown>): boolean {
+  return (
+    firstBoolean(record, ["use_hidden_models", "useHiddenModels"]) !== undefined ||
+    firstArray(record, ["available_models", "availableModels"]) !== undefined ||
+    firstString(record, ["default_model", "defaultModel"]) !== undefined
+  );
+}
+
+function normalizeAvailableModels(values: unknown[] | undefined): string[] {
+  if (!values?.length) {
+    return [];
+  }
+
+  return [...new Set(
+    values
+      .map((value) => {
+        if (typeof value === "string") {
+          return normalizeModelId(value);
+        }
+        if (!value || typeof value !== "object") {
+          return "";
+        }
+        const record = value as Record<string, unknown>;
+        return normalizeModelId(
+          firstString(record, ["model", "id", "slug", "name"]) ?? "",
+        );
+      })
+      .filter((modelId) => modelId.length > 0),
+  )];
+}
+
 function buildModelListError(
   payload: unknown,
   contentType: string | undefined,
   candidates: ModelCandidate[],
+  source: ModelCatalogSource,
 ): string {
   const topLevelKeys =
     payload && typeof payload === "object" && !Array.isArray(payload)
@@ -518,7 +673,9 @@ function buildModelListError(
   const bodyPreview = createBodyPreview(payload);
 
   return [
-    "model list response did not include any usable models",
+    source === "official"
+      ? "official model catalog response did not include any usable models"
+      : "model list response did not include any usable models",
     `(content-type: ${contentType ?? "unknown"}; top-level keys: ${topLevelKeys.join(", ") || "none"}; candidate paths: ${candidatePaths}; body preview: ${bodyPreview})`,
   ].join(" ");
 }

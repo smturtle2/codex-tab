@@ -21,6 +21,8 @@ export const OAUTH_ORIGINATOR = "codex_cli_rs";
 export const AUTH_SECRET_KEY = "codexAutocomplete.oauthSession";
 
 export type ReasoningEffort = typeof REASONING_EFFORT_VALUES[number];
+export type ModelCatalogSource = "official" | "backend_fallback";
+export type ModelDescriptorSource = ModelCatalogSource | "synthetic";
 
 export interface ExtensionSettings {
   enabled: boolean;
@@ -32,13 +34,29 @@ export interface ExtensionSettings {
   requestTimeoutMs: number;
 }
 
+export interface ModelAvailabilityConfig {
+  availableModels: string[];
+  useHiddenModels: boolean;
+  defaultModel?: string | undefined;
+}
+
 export interface ModelDescriptor {
   id: string;
   label: string;
   defaultReasoningEffort?: ReasoningEffort | undefined;
+  hidden?: boolean | undefined;
   isDefault?: boolean | undefined;
   supportedReasoningEfforts?: ReasoningEffort[] | undefined;
   reasoningEffortSource?: "backend" | "inferred" | undefined;
+  source?: ModelDescriptorSource | undefined;
+}
+
+export interface ModelCatalog {
+  source: ModelCatalogSource;
+  models: ModelDescriptor[];
+  visibleModels: ModelDescriptor[];
+  availabilityConfig?: ModelAvailabilityConfig | undefined;
+  warnings: string[];
 }
 
 export interface AuthSessionRecord {

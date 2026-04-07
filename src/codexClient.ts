@@ -7,6 +7,7 @@ import type {
   HttpClient,
   HttpResponse,
   LoggerLike,
+  ModelAvailabilityConfig,
   ModelDescriptor,
 } from "./types";
 import {
@@ -16,7 +17,12 @@ import {
   RESPONSES_BASE_URL,
 } from "./types";
 import { assertOk } from "./http";
-import { normalizeModelId, parseModelListResponse } from "./models";
+import {
+  normalizeModelId,
+  parseModelAvailabilityConfigResponse,
+  parseModelCatalogResponse,
+  parseModelListResponse,
+} from "./models";
 import { buildPrompt } from "./prompts";
 import { normalizeCompletionText, parseSseEvents } from "./util";
 
@@ -36,6 +42,14 @@ interface CodexClientConfig {
   reasoningEffort: ExtensionSettings["reasoningEffort"];
   requestTimeoutMs: ExtensionSettings["requestTimeoutMs"];
   clientVersion?: string | undefined;
+}
+
+interface JsonRequestAttempt {
+  label: string;
+  method: "GET" | "POST";
+  pathname: string;
+  query?: Record<string, string> | undefined;
+  jsonBody?: Record<string, unknown> | undefined;
 }
 
 export class CodexResponsesClient {
@@ -72,24 +86,97 @@ export class CodexResponsesClient {
     this.invalidate();
   }
 
-  public async listModels(signal?: AbortSignal): Promise<ModelDescriptor[]> {
-    const response = await this.withAuthRetry(
-      async (snapshot) =>
-        await this.httpClient.request({
-          method: "GET",
-          url: this.buildCodexUrl("/models"),
-          headers: {
-            ...buildAuthHeaders(snapshot),
-            Accept: "application/json",
-          },
-          timeoutMs: this.timeoutMs,
-          signal,
-        }),
+  public async listOfficialModels(signal?: AbortSignal): Promise<ModelDescriptor[]> {
+    const attempts: JsonRequestAttempt[] = [
+      {
+        label: "GET /model/list?includeHidden=true",
+        method: "GET",
+        pathname: "/model/list",
+        query: { includeHidden: "true" },
+      },
+      {
+        label: "GET /model/list?include_hidden=true",
+        method: "GET",
+        pathname: "/model/list",
+        query: { include_hidden: "true" },
+      },
+      {
+        label: "POST /model/list { includeHidden: true }",
+        method: "POST",
+        pathname: "/model/list",
+        jsonBody: { includeHidden: true },
+      },
+      {
+        label: "GET /models/list?includeHidden=true",
+        method: "GET",
+        pathname: "/models/list",
+        query: { includeHidden: "true" },
+      },
+    ];
+
+    return await this.tryJsonModelAttempts(
+      attempts,
+      (response) => parseModelCatalogResponse(response, "official"),
+      "official model catalog unavailable",
+      signal,
+    );
+  }
+
+  public async listFallbackModels(signal?: AbortSignal): Promise<ModelDescriptor[]> {
+    const response = await this.requestJson(
+      {
+        label: "GET /models",
+        method: "GET",
+        pathname: "/models",
+      },
       signal,
     );
 
     assertOk(response, "model list request failed");
     return parseModelListResponse(response);
+  }
+
+  public async loadModelAvailabilityConfig(
+    signal?: AbortSignal,
+  ): Promise<ModelAvailabilityConfig | undefined> {
+    const attempts: JsonRequestAttempt[] = [
+      {
+        label: "GET /config/read?key=codex-app-vscode-model-availability",
+        method: "GET",
+        pathname: "/config/read",
+        query: { key: "codex-app-vscode-model-availability" },
+      },
+      {
+        label: "POST /config/read",
+        method: "POST",
+        pathname: "/config/read",
+        jsonBody: { key: "codex-app-vscode-model-availability" },
+      },
+      {
+        label: "GET /statsig/config?name=codex-app-vscode-model-availability",
+        method: "GET",
+        pathname: "/statsig/config",
+        query: { name: "codex-app-vscode-model-availability" },
+      },
+    ];
+
+    for (const attempt of attempts) {
+      try {
+        const response = await this.requestJson(attempt, signal);
+        if (response.status < 200 || response.status >= 300) {
+          continue;
+        }
+
+        const parsed = parseModelAvailabilityConfigResponse(response);
+        if (parsed) {
+          return parsed;
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    return undefined;
   }
 
   public async hasSession(): Promise<boolean> {
@@ -194,9 +281,60 @@ export class CodexResponsesClient {
     return await fn(refreshed);
   }
 
-  private buildCodexUrl(pathname: string): string {
+  private async requestJson(
+    attempt: JsonRequestAttempt,
+    signal?: AbortSignal,
+  ): Promise<HttpResponse> {
+    return await this.withAuthRetry(
+      async (snapshot) =>
+        await this.httpClient.request({
+          method: attempt.method,
+          url: this.buildCodexUrl(attempt.pathname, attempt.query),
+          headers: buildJsonHeaders(snapshot),
+          ...(attempt.jsonBody ? { jsonBody: attempt.jsonBody } : {}),
+          timeoutMs: this.timeoutMs,
+          signal,
+        }),
+      signal,
+    );
+  }
+
+  private async tryJsonModelAttempts(
+    attempts: JsonRequestAttempt[],
+    parse: (response: HttpResponse) => ModelDescriptor[],
+    failurePrefix: string,
+    signal?: AbortSignal,
+  ): Promise<ModelDescriptor[]> {
+    const errors: string[] = [];
+
+    for (const attempt of attempts) {
+      try {
+        const response = await this.requestJson(attempt, signal);
+        if (response.status < 200 || response.status >= 300) {
+          errors.push(`${attempt.label}: ${summarizeHttpFailure(response)}`);
+          continue;
+        }
+
+        return parse(response);
+      } catch (error) {
+        errors.push(`${attempt.label}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    throw new Error(
+      `${failurePrefix}: ${errors.join("; ") || "no usable request variant succeeded"}`,
+    );
+  }
+
+  private buildCodexUrl(
+    pathname: string,
+    query?: Record<string, string> | undefined,
+  ): string {
     const url = new URL(`${RESPONSES_BASE_URL}${pathname}`);
     url.searchParams.set("client_version", this.clientVersion);
+    for (const [key, value] of Object.entries(query ?? {})) {
+      url.searchParams.set(key, value);
+    }
     return url.toString();
   }
 }
@@ -225,6 +363,19 @@ function buildAuthHeaders(snapshot: AuthSnapshot): Record<string, string> {
   }
 
   return headers;
+}
+
+function buildJsonHeaders(snapshot: AuthSnapshot): Record<string, string> {
+  return {
+    ...buildAuthHeaders(snapshot),
+    Accept: "application/json",
+  };
+}
+
+function summarizeHttpFailure(response: HttpResponse): string {
+  const bodyText = response.bodyText.trim();
+  const preview = bodyText.length > 160 ? `${bodyText.slice(0, 160)}...` : bodyText;
+  return `${response.status} ${preview || "(empty body)"}`;
 }
 
 function parseStreamedText(bodyText: string): string {

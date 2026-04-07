@@ -7,6 +7,7 @@ import type {
   HttpClient,
   HttpRequestOptions,
   HttpResponse,
+  LoggerLike,
 } from "../types";
 
 class FakeAuthStore {
@@ -58,23 +59,14 @@ test("CodexResponsesClient creates streamed completion requests and parses delta
     },
   };
 
-  const client = new CodexResponsesClient(
-    new FakeAuthStore({
-      accessToken: "access",
-      refreshToken: "refresh",
-      accountId: "acct",
-      idToken: undefined,
-      expiresAt: undefined,
-      lastRefresh: undefined,
-    }),
-    httpClient,
-    createLogger(),
-    {
-      reasoningEffort: "low",
-      requestTimeoutMs: 20_000,
-      clientVersion: "1.2.3",
-    },
-  );
+  const client = createClient(httpClient, {
+    accessToken: "access",
+    refreshToken: "refresh",
+    accountId: "acct",
+    idToken: undefined,
+    expiresAt: undefined,
+    lastRefresh: undefined,
+  });
 
   const result = await client.complete(
     {
@@ -104,17 +96,9 @@ test("CodexResponsesClient creates streamed completion requests and parses delta
   assert.match(requests[0]!.url, /\/responses\?client_version=1\.2\.3$/);
 });
 
-test("CodexResponsesClient probe uses the required model without /models preflight", async () => {
+test("CodexResponsesClient probe uses the required model without catalog preflight", async () => {
   const requests: HttpRequestOptions[] = [];
-  const client = new CodexResponsesClient(
-    new FakeAuthStore({
-      accessToken: "access",
-      refreshToken: "refresh",
-      accountId: undefined,
-      idToken: undefined,
-      expiresAt: undefined,
-      lastRefresh: undefined,
-    }),
+  const client = createClient(
     {
       async request(options: HttpRequestOptions): Promise<HttpResponse> {
         requests.push(options);
@@ -132,11 +116,13 @@ test("CodexResponsesClient probe uses the required model without /models preflig
         };
       },
     },
-    createLogger(),
     {
-      reasoningEffort: "low",
-      requestTimeoutMs: 20_000,
-      clientVersion: "1.2.3",
+      accessToken: "access",
+      refreshToken: "refresh",
+      accountId: undefined,
+      idToken: undefined,
+      expiresAt: undefined,
+      lastRefresh: undefined,
     },
   );
 
@@ -147,15 +133,7 @@ test("CodexResponsesClient probe uses the required model without /models preflig
 });
 
 test("CodexResponsesClient fails closed on tool-call events", async () => {
-  const client = new CodexResponsesClient(
-    new FakeAuthStore({
-      accessToken: "access",
-      refreshToken: "refresh",
-      accountId: undefined,
-      idToken: undefined,
-      expiresAt: undefined,
-      lastRefresh: undefined,
-    }),
+  const client = createClient(
     {
       async request(): Promise<HttpResponse> {
         return {
@@ -172,11 +150,13 @@ test("CodexResponsesClient fails closed on tool-call events", async () => {
         };
       },
     },
-    createLogger(),
     {
-      reasoningEffort: "low",
-      requestTimeoutMs: 20_000,
-      clientVersion: "1.2.3",
+      accessToken: "access",
+      refreshToken: "refresh",
+      accountId: undefined,
+      idToken: undefined,
+      expiresAt: undefined,
+      lastRefresh: undefined,
     },
   );
 
@@ -197,16 +177,124 @@ test("CodexResponsesClient fails closed on tool-call events", async () => {
   }, /tool calls are unsupported/i);
 });
 
-test("CodexResponsesClient lists models from the Codex backend", async () => {
-  const client = new CodexResponsesClient(
-    new FakeAuthStore({
+test("CodexResponsesClient lists models from the official catalog route when available", async () => {
+  const requests: HttpRequestOptions[] = [];
+  const client = createClient(
+    {
+      async request(options: HttpRequestOptions): Promise<HttpResponse> {
+        requests.push(options);
+        assert.equal(options.method, "GET");
+        assert.match(options.url, /\/model\/list\?client_version=1\.2\.3&includeHidden=true$/);
+        assert.equal(options.headers?.Accept, "application/json");
+        assert.equal(options.headers?.Authorization, "Bearer access");
+        assert.equal(options.headers?.["ChatGPT-Account-ID"], "acct");
+        return {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+          bodyText: JSON.stringify({
+            data: [
+              {
+                model: "gpt-5.4",
+                displayName: "GPT-5.4",
+                isDefault: true,
+                supportedReasoningEfforts: [
+                  { reasoningEffort: "minimal" },
+                  { reasoningEffort: "high" },
+                ],
+              },
+            ],
+          }),
+        };
+      },
+    },
+    {
       accessToken: "access",
       refreshToken: "refresh",
       accountId: "acct",
       idToken: undefined,
       expiresAt: undefined,
       lastRefresh: undefined,
-    }),
+    },
+  );
+
+  const models = await client.listOfficialModels();
+
+  assert.equal(requests.length, 1);
+  assert.deepEqual(models, [
+    {
+      id: "gpt-5.4",
+      label: "GPT-5.4",
+      isDefault: true,
+      supportedReasoningEfforts: ["minimal", "high"],
+      reasoningEffortSource: "backend",
+      source: "official",
+    },
+  ]);
+});
+
+test("CodexResponsesClient retries alternate official catalog variants before failing over elsewhere", async () => {
+  const requests: HttpRequestOptions[] = [];
+  const client = createClient(
+    {
+      async request(options: HttpRequestOptions): Promise<HttpResponse> {
+        requests.push(options);
+        if (requests.length < 3) {
+          return {
+            status: 404,
+            headers: {
+              "content-type": "application/json",
+            },
+            bodyText: JSON.stringify({ error: "not found" }),
+          };
+        }
+
+        assert.equal(options.method, "POST");
+        assert.match(options.url, /\/model\/list\?client_version=1\.2\.3$/);
+        assert.deepEqual(options.jsonBody, { includeHidden: true });
+        return {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+          bodyText: JSON.stringify({
+            data: [
+              {
+                id: "gpt-5.3-codex",
+                label: "GPT-5.3 Codex",
+              },
+            ],
+          }),
+        };
+      },
+    },
+    {
+      accessToken: "access",
+      refreshToken: "refresh",
+      accountId: undefined,
+      idToken: undefined,
+      expiresAt: undefined,
+      lastRefresh: undefined,
+    },
+  );
+
+  const models = await client.listOfficialModels();
+
+  assert.equal(requests.length, 3);
+  assert.deepEqual(models, [
+    {
+      id: "gpt-5.3-codex",
+      label: "GPT-5.3 Codex",
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+      reasoningEffortSource: "inferred",
+      source: "official",
+    },
+  ]);
+});
+
+test("CodexResponsesClient lists models from the fallback Codex backend route", async () => {
+  const client = createClient(
     {
       async request(options: HttpRequestOptions): Promise<HttpResponse> {
         assert.equal(options.method, "GET");
@@ -229,15 +317,17 @@ test("CodexResponsesClient lists models from the Codex backend", async () => {
         };
       },
     },
-    createLogger(),
     {
-      reasoningEffort: "low",
-      requestTimeoutMs: 20_000,
-      clientVersion: "1.2.3",
+      accessToken: "access",
+      refreshToken: "refresh",
+      accountId: "acct",
+      idToken: undefined,
+      expiresAt: undefined,
+      lastRefresh: undefined,
     },
   );
 
-  const models = await client.listModels();
+  const models = await client.listFallbackModels();
 
   assert.deepEqual(models, [
     {
@@ -245,8 +335,66 @@ test("CodexResponsesClient lists models from the Codex backend", async () => {
       label: "GPT-5.4 Mini",
       supportedReasoningEfforts: ["minimal", "low", "medium", "high"],
       reasoningEffortSource: "backend",
+      source: "backend_fallback",
     },
   ]);
+});
+
+test("CodexResponsesClient loads model availability config on a best-effort basis", async () => {
+  const requests: HttpRequestOptions[] = [];
+  const client = createClient(
+    {
+      async request(options: HttpRequestOptions): Promise<HttpResponse> {
+        requests.push(options);
+        if (requests.length < 2) {
+          return {
+            status: 404,
+            headers: {
+              "content-type": "application/json",
+            },
+            bodyText: JSON.stringify({ error: "not found" }),
+          };
+        }
+
+        assert.equal(options.method, "POST");
+        assert.match(options.url, /\/config\/read\?client_version=1\.2\.3$/);
+        assert.deepEqual(options.jsonBody, {
+          key: "codex-app-vscode-model-availability",
+        });
+        return {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+          bodyText: JSON.stringify({
+            config: {
+              value: {
+                available_models: ["gpt-5.4", "gpt-5.3-codex"],
+                use_hidden_models: true,
+                default_model: "gpt-5.4",
+              },
+            },
+          }),
+        };
+      },
+    },
+    {
+      accessToken: "access",
+      refreshToken: "refresh",
+      accountId: undefined,
+      idToken: undefined,
+      expiresAt: undefined,
+      lastRefresh: undefined,
+    },
+  );
+
+  const config = await client.loadModelAvailabilityConfig();
+
+  assert.deepEqual(config, {
+    availableModels: ["gpt-5.4", "gpt-5.3-codex"],
+    useHiddenModels: true,
+    defaultModel: "gpt-5.4",
+  });
 });
 
 test("CodexResponsesClient falls back to a default client version when none is provided", async () => {
@@ -291,25 +439,19 @@ test("CodexResponsesClient falls back to a default client version when none is p
 });
 
 test("CodexResponsesClient requires a non-empty model id at call time", async () => {
-  const client = new CodexResponsesClient(
-    new FakeAuthStore({
+  const client = createClient(
+    {
+      async request(): Promise<HttpResponse> {
+        throw new Error("request should not be called");
+      },
+    },
+    {
       accessToken: "access",
       refreshToken: "refresh",
       accountId: undefined,
       idToken: undefined,
       expiresAt: undefined,
       lastRefresh: undefined,
-    }),
-    {
-      async request(): Promise<HttpResponse> {
-        throw new Error("request should not be called");
-      },
-    },
-    createLogger(),
-    {
-      reasoningEffort: "low",
-      requestTimeoutMs: 20_000,
-      clientVersion: "1.2.3",
     },
   );
 
@@ -318,7 +460,23 @@ test("CodexResponsesClient requires a non-empty model id at call time", async ()
   }, /non-empty model id/i);
 });
 
-function createLogger() {
+function createClient(
+  httpClient: HttpClient,
+  snapshot: AuthSnapshot,
+): CodexResponsesClient {
+  return new CodexResponsesClient(
+    new FakeAuthStore(snapshot),
+    httpClient,
+    createLogger(),
+    {
+      reasoningEffort: "low",
+      requestTimeoutMs: 20_000,
+      clientVersion: "1.2.3",
+    },
+  );
+}
+
+function createLogger(): LoggerLike {
   return {
     info(): void {},
     warn(): void {},

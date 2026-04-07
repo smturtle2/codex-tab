@@ -2,7 +2,7 @@
   "name": "codex-tab",
   "displayName": "Codex Tab",
   "description": "code-server-only ghost text autocomplete backed by Codex OAuth PKCE sign-in.",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "publisher": "smturtle2",
   "license": "Apache-2.0",
   "repository": {

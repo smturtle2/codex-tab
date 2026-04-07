@@ -3,15 +3,18 @@ import assert from "node:assert/strict";
 
 import {
   createSyntheticModelDescriptor,
+  filterModelCatalog,
   formatReasoningEffortLabel,
   getReasoningEffortsForModel,
   isAutomaticModelSelection,
   normalizeModelId,
   normalizeReasoningEffort,
+  parseModelAvailabilityConfig,
+  parseModelCatalogResponse,
   parseModelListResponse,
   resolveDefaultModel,
-  validateModelReasoning,
   validateConfiguredModel,
+  validateModelReasoning,
 } from "../models";
 import type { HttpResponse, ModelDescriptor } from "../types";
 
@@ -48,8 +51,8 @@ test("getReasoningEffortsForModel infers codex and GPT-5 families", () => {
   ]);
 });
 
-test("resolveDefaultModel prefers backend defaults and synthetic models infer capabilities", () => {
-  const resolved = resolveDefaultModel([
+test("resolveDefaultModel prefers backend defaults, then availability config, and synthetic models infer capabilities", () => {
+  const backendDefault = resolveDefaultModel([
     {
       id: "gpt-5.2-codex",
       label: "GPT-5.2 Codex",
@@ -65,13 +68,37 @@ test("resolveDefaultModel prefers backend defaults and synthetic models infer ca
       reasoningEffortSource: "backend",
     },
   ]);
+  assert.equal(backendDefault.id, "gpt-5.3-codex");
 
-  assert.equal(resolved.id, "gpt-5.3-codex");
+  const configDefault = resolveDefaultModel(
+    [
+      {
+        id: "gpt-5.4",
+        label: "GPT-5.4",
+        supportedReasoningEfforts: ["minimal", "low", "medium", "high"],
+        reasoningEffortSource: "backend",
+      },
+      {
+        id: "gpt-5.3-codex",
+        label: "GPT-5.3 Codex",
+        supportedReasoningEfforts: ["low", "medium", "high"],
+        reasoningEffortSource: "backend",
+      },
+    ],
+    {
+      availableModels: ["gpt-5.4", "gpt-5.3-codex"],
+      useHiddenModels: true,
+      defaultModel: "gpt-5.4",
+    },
+  );
+  assert.equal(configDefault.id, "gpt-5.4");
+
   assert.deepEqual(createSyntheticModelDescriptor("gpt-5.4-mini"), {
     id: "gpt-5.4-mini",
     label: "gpt-5.4-mini",
     supportedReasoningEfforts: ["minimal", "low", "medium", "high"],
     reasoningEffortSource: "inferred",
+    source: "synthetic",
   });
 });
 
@@ -94,25 +121,25 @@ test("parseModelListResponse handles nested model arrays and infers reasoning wh
     }),
   };
 
-  const models = parseModelListResponse(response);
-
-  assert.deepEqual(models, [
+  assert.deepEqual(parseModelListResponse(response), [
     {
       id: "gpt-5.2-codex",
       label: "gpt-5.2-codex",
       supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
       reasoningEffortSource: "inferred",
+      source: "backend_fallback",
     },
     {
       id: "gpt-5.4-mini",
       label: "GPT-5.4 Mini",
       supportedReasoningEfforts: ["minimal", "low", "medium", "high"],
       reasoningEffortSource: "inferred",
+      source: "backend_fallback",
     },
   ]);
 });
 
-test("parseModelListResponse handles official model metadata and reasoning option objects", () => {
+test("parseModelCatalogResponse parses official catalog records with richer metadata", () => {
   const response: HttpResponse = {
     status: 200,
     headers: {
@@ -124,6 +151,7 @@ test("parseModelListResponse handles official model metadata and reasoning optio
           model: "gpt-5.3-codex",
           displayName: "GPT-5.3 Codex",
           isDefault: true,
+          hidden: false,
           defaultReasoningEffort: "medium",
           supportedReasoningEfforts: [
             { reasoningEffort: "low", description: "Fast" },
@@ -135,14 +163,16 @@ test("parseModelListResponse handles official model metadata and reasoning optio
     }),
   };
 
-  assert.deepEqual(parseModelListResponse(response), [
+  assert.deepEqual(parseModelCatalogResponse(response, "official"), [
     {
       id: "gpt-5.3-codex",
       label: "GPT-5.3 Codex",
       defaultReasoningEffort: "medium",
+      hidden: false,
       isDefault: true,
       supportedReasoningEfforts: ["low", "medium", "xhigh"],
       reasoningEffortSource: "backend",
+      source: "official",
     },
   ]);
 });
@@ -183,8 +213,65 @@ test("parseModelListResponse handles deeper wrapper objects and slug-based ids",
       defaultReasoningEffort: "high",
       supportedReasoningEfforts: ["minimal", "high"],
       reasoningEffortSource: "backend",
+      source: "backend_fallback",
     },
   ]);
+});
+
+test("parseModelAvailabilityConfig and filterModelCatalog apply official visibility rules", () => {
+  const availabilityConfig = parseModelAvailabilityConfig({
+    dynamic_configs: {
+      "codex-app-vscode-model-availability": {
+        value: {
+          available_models: ["gpt-5.4", "gpt-5.3-codex"],
+          use_hidden_models: true,
+          default_model: "gpt-5.4",
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(availabilityConfig, {
+    availableModels: ["gpt-5.4", "gpt-5.3-codex"],
+    useHiddenModels: true,
+    defaultModel: "gpt-5.4",
+  });
+
+  const models: ModelDescriptor[] = [
+    {
+      id: "gpt-5.4",
+      label: "GPT-5.4",
+      hidden: true,
+      supportedReasoningEfforts: ["minimal", "low", "medium", "high"],
+      reasoningEffortSource: "backend",
+      source: "official",
+    },
+    {
+      id: "gpt-5.3-codex",
+      label: "GPT-5.3 Codex",
+      hidden: false,
+      supportedReasoningEfforts: ["low", "medium", "high"],
+      reasoningEffortSource: "backend",
+      source: "official",
+    },
+    {
+      id: "gpt-4.1",
+      label: "GPT-4.1",
+      hidden: false,
+      supportedReasoningEfforts: ["low", "medium", "high"],
+      reasoningEffortSource: "backend",
+      source: "official",
+    },
+  ];
+
+  assert.deepEqual(
+    filterModelCatalog(models, availabilityConfig).map((model) => model.id),
+    ["gpt-5.4", "gpt-5.3-codex"],
+  );
+  assert.deepEqual(
+    filterModelCatalog(models).map((model) => model.id),
+    ["gpt-5.3-codex", "gpt-4.1"],
+  );
 });
 
 test("validateConfiguredModel rejects unavailable models and invalid backend reasoning", () => {
@@ -196,6 +283,7 @@ test("validateConfiguredModel rejects unavailable models and invalid backend rea
       isDefault: false,
       supportedReasoningEfforts: ["minimal", "low"],
       reasoningEffortSource: "backend",
+      source: "backend_fallback",
     },
   ];
 
@@ -218,7 +306,7 @@ test("validateConfiguredModel rejects unavailable models and invalid backend rea
   );
 });
 
-test("parseModelListResponse reports diagnostics for unusable payloads", () => {
+test("parseModelListResponse rejects unusable payloads", () => {
   const response: HttpResponse = {
     status: 200,
     headers: {
@@ -237,11 +325,11 @@ test("parseModelListResponse reports diagnostics for unusable payloads", () => {
 
   assert.throws(
     () => parseModelListResponse(response),
-    /top-level keys: payload; candidate paths: none; body preview:/i,
+    /model list response did not include any usable models/i,
   );
 });
 
-test("parseModelListResponse ignores unrelated metadata ids outside model containers", () => {
+test("parseModelCatalogResponse reports unusable official payloads", () => {
   const response: HttpResponse = {
     status: 200,
     headers: {
@@ -258,8 +346,8 @@ test("parseModelListResponse ignores unrelated metadata ids outside model contai
   };
 
   assert.throws(
-    () => parseModelListResponse(response),
-    /top-level keys: meta, payload; candidate paths: none; body preview:/i,
+    () => parseModelCatalogResponse(response, "official"),
+    /official model catalog response did not include any usable models/i,
   );
 });
 
